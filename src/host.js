@@ -404,8 +404,55 @@ function serveStatus(res) {
   })
 }
 
-/** Stream a file with Range support. Shared by every media route. */
+/**
+ * Identity of one on-disk cut, for conditional requests.
+ *
+ * Size plus mtime is enough: a file the user replaces differs in at least one of
+ * them, and both are free (no read, no hash of a 3MB file per request).
+ */
+function etagOf(stats) {
+  return '"' + stats.size.toString(16) + '-' + Math.round(stats.mtimeMs).toString(16) + '"'
+}
+
+/**
+ * Stream a file with Range support, and with REVALIDATING caching.
+ *
+ * `no-store` used to be here, which is the worst of both worlds for media: the
+ * browser may not keep a single byte, so every overlay opening re-downloaded the
+ * whole clip, and the splash sat black while it did. `no-cache` means "keep it,
+ * but ask before using" — combined with the ETag, an unchanged clip answers 304
+ * and playback starts from the local copy, while a clip the user just swapped in
+ * fails the comparison and streams fresh. Correct AND fast.
+ */
 function streamFile(req, res, filePath, size) {
+  let stats = null
+  try {
+    stats = statSync(filePath)
+  } catch {
+    /* fall through: serve without validators */
+  }
+  const etag = stats === null ? null : etagOf(stats)
+  const lastModified = stats === null ? null : new Date(stats.mtimeMs).toUTCString()
+  const validators = {}
+  if (etag !== null) validators.etag = etag
+  if (lastModified !== null) validators['last-modified'] = lastModified
+
+  if (etag !== null) {
+    const inm = req.headers['if-none-match']
+    const matched =
+      typeof inm === 'string' &&
+      inm
+        .split(',')
+        .map((s) => s.trim())
+        .some((candidate) => candidate === etag || candidate === '*')
+    if (matched) {
+      // The body the browser already has is still current.
+      res.writeHead(304, { ...validators, 'cache-control': 'no-cache' })
+      res.end()
+      return
+    }
+  }
+
   const range = req.headers.range
   if (typeof range === 'string') {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim())
@@ -437,11 +484,12 @@ function streamFile(req, res, filePath, size) {
       }
       end = Math.min(end, size - 1)
       res.writeHead(206, {
+        ...validators,
         'content-type': CONTENT_TYPE,
         'content-length': String(end - start + 1),
         'content-range': 'bytes ' + String(start) + '-' + String(end) + '/' + String(size),
         'accept-ranges': 'bytes',
-        'cache-control': 'no-store',
+        'cache-control': 'no-cache',
       })
       if (req.method === 'HEAD') {
         res.end()
@@ -453,10 +501,11 @@ function streamFile(req, res, filePath, size) {
   }
 
   res.writeHead(200, {
+    ...validators,
     'content-type': CONTENT_TYPE,
     'content-length': String(size),
     'accept-ranges': 'bytes',
-    'cache-control': 'no-store',
+    'cache-control': 'no-cache',
   })
   if (req.method === 'HEAD') {
     res.end()

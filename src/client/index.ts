@@ -200,6 +200,8 @@ const CSS = `
 .dba-fit{display:flex;align-items:center;gap:8px;margin-top:12px;
   font-size:12px;color:var(--dsw-alias-text-secondary,#777)}
 .dba-btn.dba-btn-on{border-color:rgba(7,193,96,.6);background:rgba(7,193,96,.12);color:#07974b}
+.dba-btn.dba-btn-preview{border-color:rgba(7,193,96,.55);color:#07974b;font-weight:600}
+.dba-btn.dba-btn-preview:hover{background:rgba(7,193,96,.12)}
 .dba-btn{border:1px solid rgba(127,127,127,.34);background:transparent;color:inherit;
   border-radius:8px;padding:5px 14px;font-size:12.5px;font-family:inherit;cursor:pointer}
 .dba-btn:hover{background:rgba(127,127,127,.14)}
@@ -249,7 +251,14 @@ function useCurrentSession(store: CurrentStore | null): {
   return { sessionId, isNewConversation: binding?.hooks?.session?.blankBit === true }
 }
 
-function BootOverlay({ store }: { store: CurrentStore | null }): ReactElement | null {
+function BootOverlay({
+  store,
+  previewAt = 0,
+}: {
+  store: CurrentStore | null
+  /** Bumped by the library's preview button to force a play right now. */
+  previewAt?: number
+}): ReactElement | null {
   ensureStyle()
 
   const { sessionId, isNewConversation } = useCurrentSession(store)
@@ -304,6 +313,17 @@ function BootOverlay({ store }: { store: CurrentStore | null }): ReactElement | 
       open()
     }
   }, [sessionId, isNewConversation, open])
+
+  // An explicit preview from the library. This exists because the normal trigger
+  // is deliberately narrow — a NEW conversation plays once, and only a PINNED one
+  // replays — so "I switched the clip and refreshed and the other one never
+  // showed" was the expected behaviour of a design with no way to check your
+  // choice. A preview button removes that guesswork.
+  useEffect(() => {
+    if (previewAt === 0) return
+    log('preview requested', previewAt)
+    open()
+  }, [previewAt, open])
 
   // Start playback explicitly: relying on the autoplay attribute alone is
   // fragile, and a rejected play() has to surface as a tappable state.
@@ -467,7 +487,7 @@ const SOURCE_LABEL: Record<string, string> = {
  * file in and presses refresh — because a browser-side upload would have to
  * carry the bytes through this route for no gain on a local-only plugin.
  */
-function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
+function VideoLibrary({ onClose, onPreview }: { onClose: () => void; onPreview: () => void }): ReactElement {
   ensureStyle()
   const [state, setState] = useState<VideoList | null>(null)
   const [fit, setFit] = useState<Fit>(() => readFit())
@@ -620,6 +640,16 @@ function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
         { className: 'dba-bar' },
         h(
           'button',
+          {
+            type: 'button',
+            className: 'dba-btn dba-btn-preview',
+            title: '立刻播放当前选中的这段，不用等下一次开新对话或钉住的会话',
+            onClick: onPreview,
+          },
+          '▶ 预览当前',
+        ),
+        h(
+          'button',
           { type: 'button', className: 'dba-btn', onClick: () => void load() },
           '刷新',
         ),
@@ -673,6 +703,9 @@ export function apply(ctx: ClientContext): void {
   // by the plugin loader, not by React, and a hook call there would throw.
   const AppRoot = () => {
     const [libOpen, setLibOpen] = useState(false)
+    // Bumped on preview. Closing the library and bumping in the same handler is
+    // what makes it work: BootOverlay only exists while the library is closed.
+    const [previewAt, setPreviewAt] = useState(0)
 
     const openSelf = useCallback(() => setLibOpen(true), [])
     useEffect(() => {
@@ -691,8 +724,16 @@ export function apply(ctx: ClientContext): void {
     // No `activeId` state lives here: the overlay always loads VIDEO_URL and the
     // host resolves which clip that is per request, so a switch is picked up on
     // the next open without threading an id into the src mid-playback.
-    if (libOpen) return h(VideoLibrary, { onClose: () => setLibOpen(false) })
-    return h(BootOverlay, { store })
+    if (libOpen) {
+      return h(VideoLibrary, {
+        onClose: () => setLibOpen(false),
+        onPreview: () => {
+          setLibOpen(false)
+          setPreviewAt((n) => n + 1)
+        },
+      })
+    }
+    return h(BootOverlay, { store, previewAt })
   }
 
   const Pin = () => h(PinAction, { store, onOpen: () => openLibrary() })

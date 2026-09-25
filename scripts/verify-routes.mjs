@@ -54,7 +54,7 @@ function resolve(pathname) {
 }
 
 /** Drive one request through the resolved handler. */
-function call(rawUrl, method = 'GET') {
+function call(rawUrl, method = 'GET', headers = {}) {
   return new Promise((done) => {
     const pathname = rawUrl.split('?')[0]
     const route = resolve(pathname)
@@ -62,7 +62,7 @@ function call(rawUrl, method = 'GET') {
       done({ code: 404, note: 'NO ROUTE MATCHED' })
       return
     }
-    const req = { method, url: rawUrl, headers: {}, on: () => req, destroy: () => {} }
+    const req = { method, url: rawUrl, headers, on: () => req, destroy: () => {} }
     const res = {
       statusCode: 200,
       headers: {},
@@ -147,6 +147,94 @@ await expect(`${BASE}/nope.json`, 404)
 
 console.log('\nuncacheable failures:')
 for (const url of [missId, noId, slashId, wrongMethod]) expectNoStore(url)
+
+/**
+ * Media must be REUSABLE, not uncacheable.
+ *
+ * `no-store` on the video meant the browser could keep nothing, so every
+ * overlay opening re-downloaded the whole clip and the splash sat black while
+ * it did. The clip needs `no-cache` plus an ETag: a 304 reuses the local copy
+ * (fast), and a swapped-in clip fails the comparison and streams fresh (correct).
+ */
+console.log('\nreusable media:')
+{
+  const url = `${BASE}/boot.mp4`
+  const first = await call(url)
+  const etag = first.headers?.etag
+  const cache = String(first.headers?.['cache-control'] ?? '')
+  const okEtag = typeof etag === 'string' && etag.length > 2
+  const okCache = cache.includes('no-cache') && !cache.includes('no-store')
+  console.log(`  ${okEtag ? 'ok  ' : 'FAIL'} ${url} etag: ${etag ?? '(none)'}`)
+  console.log(`  ${okCache ? 'ok  ' : 'FAIL'} ${url} cache-control: ${cache === '' ? '(none)' : cache}`)
+  if (!okEtag) failures.push(`${url} has no ETag, so nothing can be reused`)
+  if (!okCache) failures.push(`${url} cache-control is "${cache}" — it must allow revalidated reuse`)
+
+  if (okEtag) {
+    const second = await call(url, 'GET', { 'if-none-match': etag })
+    const ok304 = second.code === 304
+    console.log(`  ${ok304 ? 'ok  ' : 'FAIL'} ${url} with If-None-Match -> ${second.code} (want 304)`)
+    if (!ok304) failures.push(`${url} ignored If-None-Match (got ${second.code}, want 304) — replay would refetch`)
+  }
+}
+
+/**
+ * A cached clip must never be served for a DIFFERENT clip.
+ *
+ * This is the failure the user actually hit, read the other way round: with a
+ * revalidating cache, a stale ETag accepted for the newly selected clip would
+ * pin the overlay to the old video no matter how many times you refresh. Checked
+ * across every library entry (via /media/<id>, so the run never rewrites the
+ * user's selection file), asserting that different artifacts carry different
+ * validators and that a foreign ETag is refused.
+ *
+ * The ETag is size+mtime, so two byte-identical copies DO share one — and that
+ * is correct, not a collision: a 304 hands back the same bytes either way. The
+ * assertion is therefore "distinct (size, mtime) implies distinct ETag", not
+ * "all ETags differ".
+ */
+console.log('\nrevalidation across clips:')
+{
+  const etagById = new Map()
+  for (const id of ids) {
+    const r = await call(`${BASE}/media/${id}`)
+    etagById.set(id, r.headers?.etag)
+  }
+
+  const etagByArtifact = new Map()
+  let everyEtag = true
+  for (const v of list.videos ?? []) {
+    const e = etagById.get(v.id)
+    if (typeof e !== 'string' || e.length < 3) everyEtag = false
+    etagByArtifact.set(`${v.bytes}@${v.mtime}`, e)
+  }
+  const artifacts = [...etagByArtifact.keys()].length
+  const validators = new Set([...etagByArtifact.values()])
+  const okDistinct = everyEtag && validators.size === artifacts
+  console.log(
+    `  ${okDistinct ? 'ok  ' : 'FAIL'} ${ids.length} clip(s), ${artifacts} distinct artifact(s) -> ${validators.size} ETag(s)` +
+      (okDistinct ? '' : ' — different artifacts share a validator, so the wrong video could be served'),
+  )
+  if (!okDistinct) failures.push('distinct artifacts do not have distinct ETags')
+
+  // Two entries whose bytes differ: a stale validator must not be honoured.
+  const pairs = []
+  for (const a of list.videos ?? []) {
+    for (const b of list.videos ?? []) {
+      if (a.id !== b.id && a.bytes !== b.bytes) pairs.push([a.id, b.id])
+    }
+  }
+  if (pairs.length > 0 && okDistinct) {
+    const [a, b] = pairs[0]
+    const r = await call(`${BASE}/media/${b}`, 'GET', { 'if-none-match': etagById.get(a) })
+    const ok200 = r.code === 200
+    console.log(`  ${ok200 ? 'ok  ' : 'FAIL'} /media/${b} with ${a}'s ETag -> ${r.code} (want 200)`)
+    if (!ok200) {
+      failures.push(`a foreign ETag was accepted for ${b} (got ${r.code}) — refresh would keep the old video`)
+    }
+  } else if (pairs.length === 0) {
+    console.log('  skip  only one distinct clip present; cross-clip check needs two')
+  }
+}
 
 console.log('')
 if (failures.length === 0) {
