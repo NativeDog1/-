@@ -28,11 +28,22 @@
  */
 
 import type { ReactElement } from 'react'
-import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createElement as h, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 /** Slot service for both seats, ui-session for the current conversation. */
 export const inject = ['slots', 'uiSession']
 
+/**
+ * Plays the active clip.
+ *
+ * The src is a CONSTANT. It used to carry `#<activeId>` so the element would
+ * reload when the library selection changed, but the id arrives from an async
+ * fetch, so the src changed a moment AFTER the overlay opened — mid-playback.
+ * A src change restarts the media load, and the play() effect does not re-run
+ * on it, so the result was a black frame that looked like "the video will not
+ * load". The fragment bought nothing: the route resolves the active file on
+ * every request, so the next time the overlay opens it is already the new clip.
+ */
 const VIDEO_URL = '/dsh-boot-animation/boot.mp4'
 const LIST_URL = '/dsh-boot-animation/videos.json'
 const SELECT_URL = '/dsh-boot-animation/select'
@@ -146,6 +157,7 @@ const CSS = `
 .dba-badge{font-size:11px;padding:1px 7px;border-radius:999px;
   background:rgba(127,127,127,.18);color:var(--dsw-alias-text-secondary,#777);white-space:nowrap}
 .dba-badge.dba-b-sel{background:rgba(7,193,96,.16);color:#07974b}
+.dba-badge.dba-b-warn{background:rgba(210,120,40,.18);color:#b46214;cursor:help}
 .dba-meta{font-size:11.5px;color:var(--dsw-alias-text-secondary,#999);white-space:nowrap}
 .dba-mark{width:16px;text-align:center;color:#07c160;font-weight:700}
 .dba-dir{margin:12px 0 0;padding:9px 10px;border-radius:9px;background:rgba(127,127,127,.10);
@@ -202,13 +214,7 @@ function useCurrentSession(store: CurrentStore | null): {
   return { sessionId, isNewConversation: binding?.hooks?.session?.blankBit === true }
 }
 
-function BootOverlay({
-  store,
-  videoSrc,
-}: {
-  store: CurrentStore | null
-  videoSrc: string
-}): ReactElement | null {
+function BootOverlay({ store }: { store: CurrentStore | null }): ReactElement | null {
   ensureStyle()
 
   const { sessionId, isNewConversation } = useCurrentSession(store)
@@ -306,7 +312,7 @@ function BootOverlay({
     h('video', {
       ref: videoRef,
       className: 'dba-video',
-      src: videoSrc,
+      src: VIDEO_URL,
       muted: true,
       autoPlay: true,
       playsInline: true,
@@ -387,11 +393,13 @@ type VideoInfo = {
   id: string
   name: string
   file: string
+  ext?: string
   source: string
   writable?: boolean
   bytes: number
   mtime: string
   legacy?: boolean
+  faststart?: boolean
   active?: boolean
 }
 
@@ -513,6 +521,18 @@ function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
               h('span', { className: 'dba-mark' }, v.id === activeId ? '✓' : ''),
               h('span', { className: 'dba-nm' }, v.name),
               v.legacy ? h('span', { className: 'dba-badge' }, '原片源') : null,
+              // Only nudges on containers that can carry moov. A .webm has none,
+              // so "not optimised" would be a lie about it.
+              (v.ext === '.mp4' || v.ext === '.m4v') && v.faststart === false
+                ? h(
+                    'span',
+                    {
+                      className: 'dba-badge dba-b-warn',
+                      title: '这个文件的索引表(moov)在末尾：浏览器要整段下载完才出画面，容易黑屏。用 ffmpeg -c copy -movflags +faststart 重排一次即可。',
+                    },
+                    '⚠ 未优化',
+                  )
+                : null,
               h('span', { className: 'dba-badge' }, SOURCE_LABEL[v.source] ?? v.source),
               h('span', { className: 'dba-meta' }, formatBytes(v.bytes)),
             ),
@@ -582,26 +602,6 @@ export function apply(ctx: ClientContext): void {
   // by the plugin loader, not by React, and a hook call there would throw.
   const AppRoot = () => {
     const [libOpen, setLibOpen] = useState(false)
-    const [activeId, setActiveId] = useState<string | null>(null)
-
-    // Which clip plays. Fetched once so the overlay streams the user's pick, and
-    // re-fetched when the library closes so a switch takes effect immediately.
-    // The #id fragment is cosmetic: the route decides on its own and ignores it.
-    useEffect(() => {
-      let alive = true
-      void (async () => {
-        try {
-          const response = await fetch(LIST_URL, { cache: 'no-store' })
-          const data = (await response.json()) as { activeId?: string | null }
-          if (alive) setActiveId(typeof data.activeId === 'string' ? data.activeId : null)
-        } catch {
-          /* the /boot.mp4 route still serves the active clip without the id */
-        }
-      })()
-      return () => {
-        alive = false
-      }
-    }, [libOpen])
 
     const openSelf = useCallback(() => setLibOpen(true), [])
     useEffect(() => {
@@ -611,18 +611,17 @@ export function apply(ctx: ClientContext): void {
       }
     }, [openSelf])
 
-    const videoSrc = useMemo(
-      () => (activeId === null ? VIDEO_URL : VIDEO_URL + '#' + encodeURIComponent(activeId)),
-      [activeId],
-    )
-
     // Rendered as ELEMENTS, never called as plain functions. Calling a
     // component directly would run its hooks against AppRoot's own hook list,
     // so toggling the library would change AppRoot's hook count between renders
     // and React would throw "Rendered more hooks than during the previous
     // render" the moment the picker opened.
+    //
+    // No `activeId` state lives here: the overlay always loads VIDEO_URL and the
+    // host resolves which clip that is per request, so a switch is picked up on
+    // the next open without threading an id into the src mid-playback.
     if (libOpen) return h(VideoLibrary, { onClose: () => setLibOpen(false) })
-    return h(BootOverlay, { store, videoSrc })
+    return h(BootOverlay, { store })
   }
 
   const Pin = () => h(PinAction, { store, onOpen: () => openLibrary() })
