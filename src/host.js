@@ -323,6 +323,23 @@ function sendJson(res, payload, status = 200) {
   res.end(body)
 }
 
+/**
+ * Plain-text reply, always uncacheable.
+ *
+ * Every failure path has to say `no-store`. A 404 with no cache directive is
+ * heuristically cacheable, so a route that 404s once while it is broken keeps
+ * 404ing in that browser AFTER the fix — the server returns 200 and the user
+ * still sees nothing. That is exactly how "the video will not play" survived a
+ * fix that curl proved was live.
+ */
+function sendText(res, status, body) {
+  res.writeHead(status, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  res.end(body)
+}
+
 function publicVideo(v, extra = {}) {
   return {
     id: v.id,
@@ -392,7 +409,10 @@ function streamFile(req, res, filePath, size) {
         start <= end &&
         start < size
       if (!valid) {
-        res.writeHead(416, { 'content-range': 'bytes */' + String(size) })
+        res.writeHead(416, {
+          'content-range': 'bytes */' + String(size),
+          'cache-control': 'no-store',
+        })
         res.end()
         return
       }
@@ -430,8 +450,9 @@ function streamFile(req, res, filePath, size) {
 function serveVideo(req, res) {
   const { video } = resolveActive()
   if (video === null) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end(
+    sendText(
+      res,
+      404,
       'dsh-boot-animation: no video found (drop an .mp4 into ' +
         join(HOME_DIR(), 'videos') +
         ', set DSH_BOOT_ANIMATION, or add $DSH_HOME/boot-animation/intro.mp4)',
@@ -456,8 +477,7 @@ function serveMedia(req, res) {
   const id = decodeURIComponent(path.slice(MEDIA_ROUTE.length + 1))
   const video = id === '' ? null : findById(id)
   if (video === null) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('dsh-boot-animation: no such video id')
+    sendText(res, 404, 'dsh-boot-animation: no such video id')
     return
   }
   streamFile(req, res, video.path, video.bytes)

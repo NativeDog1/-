@@ -75,7 +75,11 @@ function call(rawUrl, method = 'GET') {
         Object.assign(this.headers, headers ?? {})
       },
       end(payload) {
-        done({ code: this.statusCode, body: payload === undefined ? null : String(payload) })
+        done({
+          code: this.statusCode,
+          headers: this.headers,
+          body: payload === undefined ? null : String(payload),
+        })
       },
     }
     route.handler(req, res)
@@ -83,13 +87,34 @@ function call(rawUrl, method = 'GET') {
 }
 
 const failures = []
-function expect(url, want) {
-  return call(url).then((r) => {
-    const ok = r.code === want
-    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${url} -> ${r.code} (want ${want})${r.note === undefined ? '' : ' ' + r.note}`)
-    if (!ok) failures.push(`${url} -> ${r.code} (want ${want})`)
-    return r
-  })
+const resources = {}
+async function expect(url, want) {
+  const r = await call(url)
+  resources[url] = r
+  const ok = r.code === want
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${url} -> ${r.code} (want ${want})${r.note === undefined ? '' : ' ' + r.note}`)
+  if (!ok) failures.push(`${url} -> ${r.code} (want ${want})`)
+  return r
+}
+
+/**
+ * A failure must never be cacheable.
+ *
+ * A 404 with no cache directive is heuristically cacheable, so a route that
+ * 404s once while broken keeps 404ing in that browser long after the fix: the
+ * server answers 200 to curl and the user still sees nothing. Asserting it here
+ * is the only way that stays true as routes are added.
+ */
+function expectNoStore(url) {
+  const r = resources[url]
+  if (r === undefined) {
+    failures.push(`${url}: never requested, cannot check cacheability`)
+    return
+  }
+  const value = r.headers?.['cache-control'] ?? ''
+  const ok = String(value).includes('no-store')
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${url} cache-control: ${value === '' ? '(none)' : value}`)
+  if (!ok) failures.push(`${url} answered ${r.code} without cache-control: no-store`)
 }
 
 console.log('registered exact   :', [...exact.keys()].join(' ') || '(none)')
@@ -110,11 +135,18 @@ console.log(`library: ${ids.length} video(s) — ${ids.join(', ')}`)
 await expect(`${BASE}/status.json`, 200)
 await expect(`${BASE}/boot.mp4`, 200)
 for (const id of ids) await expect(`${BASE}/media/${id}`, 200)
-await expect(`${BASE}/media/definitely-not-an-id`, 404)
-await expect(`${BASE}/media`, 404)
-await expect(`${BASE}/media/`, 404)
-await expect(`${BASE}/select`, 405) // GET on a POST-only endpoint
+const missId = `${BASE}/media/definitely-not-an-id`
+const noId = `${BASE}/media`
+const slashId = `${BASE}/media/`
+const wrongMethod = `${BASE}/select`
+await expect(missId, 404)
+await expect(noId, 404)
+await expect(slashId, 404)
+await expect(wrongMethod, 405) // GET on a POST-only endpoint
 await expect(`${BASE}/nope.json`, 404)
+
+console.log('\nuncacheable failures:')
+for (const url of [missId, noId, slashId, wrongMethod]) expectNoStore(url)
 
 console.log('')
 if (failures.length === 0) {
