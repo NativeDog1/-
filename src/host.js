@@ -76,6 +76,25 @@ const HOME_DIR = () => join(HOME(), 'boot-animation')
 const SELECTION_FILE = () => join(HOME_DIR(), 'selection.json')
 
 /**
+ * Friendly label for the plugin's own fallback asset.
+ *
+ * `assets/boot.mp4` is the historical filename and stays that way so existing
+ * installs and build.sh keep working — but "boot" tells a user nothing about
+ * which clip it is. The picker ended up showing two opaque rows, and the same
+ * video looked absent from the plugin entirely. Files the plugin SHIPS carry
+ * descriptive names instead (videos/*.mp4), so only this one needs a label.
+ */
+const BUNDLED_LABEL = { 'boot.mp4': '内置默认片头' }
+
+function displayName(source, fileName) {
+  if (source === 'bundled') {
+    const label = BUNDLED_LABEL[fileName.toLowerCase()]
+    if (label !== undefined) return label
+  }
+  return basename(fileName, extname(fileName))
+}
+
+/**
  * Managed directories, most specific first. `source` is what the UI shows.
  * `bundled` is last so a user file always wins a tie by id order.
  */
@@ -210,7 +229,7 @@ function listVideos() {
       seen.add(key)
       out.push({
         id: makeId(full),
-        name: basename(fileName, extname(fileName)),
+        name: displayName(source, fileName),
         file: fileName,
         ext,
         source,

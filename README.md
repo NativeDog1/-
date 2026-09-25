@@ -56,6 +56,23 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 
 插件现在是一个**片库**，不是单个槽位：它会把所有能找到的视频都列出来，你选一个，选择会被记住。
 
+### 插件自带两段片头
+
+装完不用加任何东西，片库里就已经有两段可选：
+
+| 片库里的名字 | 文件 | 来源 | 大小 |
+|---|---|---|---|
+| `内置默认片头` | `assets/boot.mp4` | 内置回退项 | 3.1 MB |
+| `deepseek-brand-intro` | `videos/deepseek-brand-intro.mp4` | 插件下发 | 2.6 MB |
+
+> `assets/boot.mp4` 的文件名是历史遗留（`build.sh` 与老安装都认它），所以它在片库里
+> 显示为「内置默认片头」——用文件名 `boot` 当标签的话，你根本看不出它是哪段片子。
+
+两段都是 **faststart** 过的（索引表 `moov` 在文件头），可以边下边播。这很重要：索引表
+在文件末尾的 mp4 要整段下载完才出画面，叠加客户端 25 秒看门狗，表现就是「片头全黑」。
+
+因为自带两段，npm 包约 **6.1 MB**（原来 3.3 MB）。
+
 ### 最省事的方式（推荐）
 
 1. 把 mp4 丢进 `~/.dsh/boot-animation/videos/`
@@ -66,6 +83,10 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 
 > Windows 上就是 `C:\Users\<你>\.dsh\boot-animation\videos\`
 > 具体路径以片库面板底部显示的那一行为准。
+>
+> 注意：如果你在 `~/.dsh/boot-animation/` 下也放了一份同名内容（历史上推荐过
+> `intro.mp4`），片库里会同时出现「你自己加的」和「插件下发」两条同样的片子。
+> 想让片库干净，删掉自己那份即可。
 
 ### 片库面板
 

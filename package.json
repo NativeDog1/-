@@ -8,6 +8,7 @@
   "files": [
     "lib",
     "assets",
+    "videos",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
