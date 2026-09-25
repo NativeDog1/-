@@ -108,8 +108,8 @@ url: https://github.com/NativeDog1/dsh-boot-animation
 name: NativeDog1/dsh-boot-animation
 category: ui
 description:
-  en: 'Plays a full-frame intro video when a new conversation starts, or every time you open the conversation you pinned — a real 720p clip with a pin button beside Settings, replaceable with your own file via DSH_BOOT_ANIMATION or the DSH home directory.'
-  zh: '打开新对话时、以及每次打开你钉住的那个会话时，铺满整个窗口播放一段片头视频——真实 720p 片源，设置旁一键钉住会话，可用 DSH_BOOT_ANIMATION 或 DSH 主目录放入自己的影片替换。'
+  en: 'Plays a real video file full-frame on a new conversation or every time you open the one you pinned. An in-app video library picks which clip plays — your own file or the bundled default — with the pin button beside Settings.'
+  zh: '打开新对话、或每次打开你钉住的那个会话时，铺满窗口播放一段真实视频。界面内置片库，可切换播你自己的片子还是插件自带的默认片；设置旁一键钉住会话。'
 ```
 
 5. **Commit changes** → 回到 fork 首页，点 **Contribute** → **Open pull request**
