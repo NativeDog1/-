@@ -1,0 +1,12 @@
+{
+  "id": "dsh-boot-animation",
+  "name": "开机动画",
+  "nameEn": "Boot Animation",
+  "author": "NativeDog1",
+  "description": "打开新对话、或打开你钉住的会话时，视频铺满整个窗口播放一段片头开机动画。支持换成自己的视频，每个会话只播一次或每次打开都播。",
+  "descriptionEn": "Plays a full-frame intro animation when you open a new DSH conversation, or any conversation you pin. Bring your own video; play once per conversation or on every open.",
+  "repo": "https://github.com/NativeDog1/-",
+  "npm": "dsh-boot-animation",
+  "category": "ui",
+  "subcategory": "panel"
+}
