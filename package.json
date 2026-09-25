@@ -51,7 +51,8 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "build:client": "tsdown",
-    "verify:routes": "node scripts/verify-routes.mjs"
+    "verify:routes": "node scripts/verify-routes.mjs",
+    "verify:letterbox": "node scripts/verify-letterbox.mjs"
   },
   "exports": {
     ".": {

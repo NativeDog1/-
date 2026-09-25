@@ -144,9 +144,14 @@ function writePinned(sessionId: string | null): void {
 const STYLE_ID = 'dsh-boot-animation-style'
 const CSS = `
 .dba-root{position:fixed;inset:0;z-index:2147483000;background:#000;
-  display:flex;align-items:center;justify-content:center;
   pointer-events:auto;cursor:pointer;overflow:hidden}
-.dba-video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
+/* Absolute fill rather than flex + width/height percentages: a percentage height
+   inside a flex item depends on the container's resolved height, and any ancestor
+   that establishes a containing block (transform/filter/contain) can shrink it.
+   `inset:0` on an absolutely positioned child of a fixed root is exactly the
+   padding box, so the video always covers the whole overlay. */
+.dba-video{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;background:#000;display:block}
 /* Fills the window edge to edge. The base rule (contain) shows the whole frame
    but leaves black bars whenever the window is not exactly the clip's aspect
    ratio — and a browser viewport almost never is, because of the chrome above
