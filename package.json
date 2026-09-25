@@ -7,8 +7,6 @@
   "types": "./lib/types/index.d.ts",
   "files": [
     "lib",
-    "assets",
-    "videos",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
@@ -52,6 +50,7 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "build:client": "node scripts/check-css-template.mjs && tsdown",
+    "embed-clips": "node scripts/embed-clips.mjs",
     "check": "node scripts/check-css-template.mjs && node scripts/verify-routes.mjs",
     "verify:routes": "node scripts/verify-routes.mjs",
     "verify:letterbox": "node scripts/verify-letterbox.mjs"

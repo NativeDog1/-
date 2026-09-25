@@ -63,10 +63,23 @@ function call(rawUrl, method = 'GET', headers = {}) {
       return
     }
     const req = { method, url: rawUrl, headers, on: () => req, destroy: () => {} }
+    // Text is kept for JSON routes; media bodies are only counted, so a 3MB
+    // embedded clip never becomes a JS string in this harness.
+    let text = ''
+    let bytes = 0
     const res = {
       statusCode: 200,
       headers: {},
-      write: () => true,
+      write(chunk) {
+        if (chunk === undefined) return true
+        if (Buffer.isBuffer(chunk)) bytes += chunk.length
+        else {
+          const s = String(chunk)
+          text += s
+          bytes += Buffer.byteLength(s)
+        }
+        return true
+      },
       on: () => {},
       once: () => {},
       emit: () => {},
@@ -75,11 +88,15 @@ function call(rawUrl, method = 'GET', headers = {}) {
         Object.assign(this.headers, headers ?? {})
       },
       end(payload) {
-        done({
-          code: this.statusCode,
-          headers: this.headers,
-          body: payload === undefined ? null : String(payload),
-        })
+        if (payload !== undefined) {
+          if (Buffer.isBuffer(payload)) bytes += payload.length
+          else {
+            const s = String(payload)
+            text += s
+            bytes += Buffer.byteLength(s)
+          }
+        }
+        done({ code: this.statusCode, headers: this.headers, body: text === '' ? null : text, bytes })
       },
     }
     route.handler(req, res)
@@ -125,6 +142,45 @@ console.log('registered prefixes:', [...prefixes.keys()].join(' '))
 for (const path of prefixes.keys()) {
   if (path.endsWith('/')) {
     failures.push(`prefix route "${path}" ends with "/" — the server matches "${path}/" and it will never fire`)
+  }
+}
+
+/**
+ * The built-in clips must be EMBEDDED, and must arrive with no media file on disk.
+ *
+ * This is the point of embedding them: nothing can be lost to a missing `files`
+ * entry, a stale copy in an installed profile, or a container that shipped
+ * without faststart. If a future change reintroduces a package media directory,
+ * this check is what says so.
+ */
+console.log('\nembedded built-ins:')
+{
+  const r = await call(`${BASE}/videos.json`)
+  const payload = JSON.parse(r.body ?? '{"videos":[]}')
+  const builtins = (payload.videos ?? []).filter((v) => v.source === 'embedded')
+  const okCount = builtins.length >= 2
+  console.log(`  ${okCount ? 'ok  ' : 'FAIL'} ${builtins.length} embedded clip(s): ${builtins.map((v) => v.name).join(' / ') || '(none)'}`)
+  if (!okCount) failures.push(`expected at least 2 embedded clips, found ${builtins.length}`)
+
+  for (const clip of builtins) {
+    if (clip.file !== null && clip.file !== undefined) {
+      failures.push(`embedded clip ${clip.id} reports a file (${clip.file}); it must live in code only`)
+    }
+    if (clip.faststart !== true) failures.push(`embedded clip ${clip.id} is not marked faststart`)
+    const media = await call(`${BASE}/media/${clip.id}`)
+    const okBytes = media.code === 200 && media.bytes === clip.bytes
+    console.log(
+      `  ${okBytes ? 'ok  ' : 'FAIL'} /media/${clip.id} -> ${media.code}, ${media.bytes} bytes (declared ${clip.bytes})`,
+    )
+    if (!okBytes) failures.push(`${clip.id} served ${media.bytes} bytes, expected ${clip.bytes}`)
+
+    const etag = media.headers?.etag
+    if (typeof etag !== 'string' || !etag.includes('embedded-')) {
+      failures.push(`${clip.id} etag is ${etag ?? '(none)'}; embedded clips must use a content-derived etag`)
+    } else {
+      const again = await call(`${BASE}/media/${clip.id}`, 'GET', { 'if-none-match': etag })
+      if (again.code !== 304) failures.push(`${clip.id} ignored If-None-Match (${again.code}, want 304)`)
+    }
   }
 }
 

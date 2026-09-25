@@ -56,22 +56,29 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 
 插件现在是一个**片库**，不是单个槽位：它会把所有能找到的视频都列出来，你选一个，选择会被记住。
 
-### 插件自带两段片头
+### 插件自带两段片头（内嵌在代码里）
 
 装完不用加任何东西，片库里就已经有两段可选：
 
-| 片库里的名字 | 文件 | 来源 | 大小 |
-|---|---|---|---|
-| `内置默认片头` | `assets/boot.mp4` | 内置回退项 | 3.1 MB |
-| `deepseek-brand-intro` | `videos/deepseek-brand-intro.mp4` | 插件下发 | 2.6 MB |
+| 片库里的名字 | 来源 | 大小 |
+|---|---|---|
+| `DeepSeek 品牌片头` | 内嵌 `lib/clips.data.js` | 2.6 MB |
+| `DeepSeek 赛博朋克片头` | 内嵌 `lib/clips.data.js` | 3.1 MB |
 
-> `assets/boot.mp4` 的文件名是历史遗留（`build.sh` 与老安装都认它），所以它在片库里
-> 显示为「内置默认片头」——用文件名 `boot` 当标签的话，你根本看不出它是哪段片子。
+**这两段没有落盘的 mp4 文件** —— 它们以 base64 存在 `lib/clips.data.js` 里，host 在
+第一次被请求时才 import（约 8 MB 的模块，如果在启动时解析，每次开 DSH 都要白付这个代价）。
+这样做的意义是：不会再有 `files` 字段漏写、安装副本过期、或者随包发出一个没做 faststart
+的容器这些事。`media/*.mp4` 只是 `npm run embed-clips` 的输入，**不随包发布**。
 
-两段都是 **faststart** 过的（索引表 `moov` 在文件头），可以边下边播。这很重要：索引表
-在文件末尾的 mp4 要整段下载完才出画面，叠加客户端 25 秒看门狗，表现就是「片头全黑」。
+两段都是 **faststart** 过的（`moov` 在文件头），可以边下边播；生成脚本会拒绝任何
+`moov` 不在前面的输入。这很重要：索引表在文件末尾的 mp4 要整段下载完才出画面，
+叠加客户端 25 秒看门狗，表现就是「片头全黑」。
 
-因为自带两段，npm 包约 **6.1 MB**（原来 3.3 MB）。
+体积：发布包约 **6.1 MB**（base64 的冗余被 gzip 抵消，所以和内嵌前一样）；
+安装后磁盘占用 8.0 MB（原来是 5.7 MB 的 mp4）。
+
+想换成自己的片子：把 mp4 放进 `media/`，改 `scripts/embed-clips.mjs` 里的清单，
+跑 `npm run embed-clips`。（临时试片不用这么麻烦 —— 见下面的「最省事的方式」。）
 
 ### 最省事的方式（推荐）
 
@@ -147,8 +154,7 @@ host 半侧按这个顺序解析，**每次请求都重新解析**（换片子�
 | 2 | 环境变量 `DSH_BOOT_ANIMATION` 指向的文件 |
 | 3 | `~/.dsh/boot-animation/intro.mp4`（历史落点，仍优先于片库里的其他文件） |
 | 4 | `~/.dsh/boot-animation/videos/` 里最新修改的那个 |
-| 5 | 包内 `videos/` 里最新修改的那个 |
-| 6 | 包内默认的 `assets/boot.mp4` |
+| 5 | **内嵌的两段**（品牌片头优先）—— 永远兜得住，因为它在代码里 |
 
 所以最保险的手动换法依然是：
 
@@ -223,8 +229,10 @@ ffprobe -v trace 修好的.mp4 2>&1 | grep -m1 moov   # 偏移应该很小
   是两个独立的 React 根，用模块级 `libraryOpeners` 订阅集合桥接
 - 片库的路由：`videos.json`（列）、`media/<id>`（按 id 流）、`select`（POST 写选择）、
   `boot.mp4`（老路由，服务当前生效的那条，向后兼容）
-- `assets/boot.mp4` 的只读属性会让 ffmpeg/覆盖写入报 `Permission denied`：
-  `Set-ItemProperty -Name IsReadOnly -Value $false`
+- 内嵌片段的 id 是 `builtin:<name>`，与路径派生的 id 不会撞；它们的 ETag 用自身的
+  内容哈希（`"embedded-<sha256前16位>"`），所以重校验是精确的、不依赖 stat
+- **同一个视频在多个位置时按内容去重**（sha256；文件侧按 size+mtime 缓存哈希结果），
+  内嵌那份优先胜出 —— 它不可能被删掉，所以指向它的选择永远解析得到
 - **prefix 路由不能带尾部斜杠**：webserver 用
   `pathname !== prefix && !pathname.startsWith(prefix + '/')` 匹配，注册
   `.../media/` 会被当成 `.../media//`，永远匹配不上（曾导致 /media/<id> 全 404）
