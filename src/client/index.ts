@@ -474,10 +474,19 @@ function formatBytes(n: number): string {
   return (n / 1024 / 1024).toFixed(2) + ' MB'
 }
 
+/**
+ * Where a clip comes from, as one word a user can act on.
+ *
+ * `bundled` and `shipped` are an implementation split — the fallback asset lives
+ * in assets/, the shipped library in videos/ — and the plugin ships BOTH clips,
+ * so showing them as two different kinds of thing made the built-in pair look
+ * like one built-in plus one user file. From the outside there are exactly two
+ * cases: the plugin brought it, or you did.
+ */
 const SOURCE_LABEL: Record<string, string> = {
   yours: '你自己加的',
-  shipped: '插件自带',
-  bundled: '内置原始',
+  shipped: '插件内置',
+  bundled: '插件内置',
   env: '环境变量',
 }
 
