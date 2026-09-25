@@ -27,12 +27,14 @@
  * and a click then unmutes AND enters real fullscreen.
  */
 
-import { createElement as h, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 /** Slot service for both seats, ui-session for the current conversation. */
 export const inject = ['slots', 'uiSession']
 
 const VIDEO_URL = '/dsh-boot-animation/boot.mp4'
+const LIST_URL = '/dsh-boot-animation/videos.json'
+const SELECT_URL = '/dsh-boot-animation/select'
 const SEEN_KEY = 'dsh-boot-animation:seen'
 const PIN_KEY = 'dsh-boot-animation:pinned'
 const MAX_SEEN = 80
@@ -126,6 +128,36 @@ const CSS = `
   font-size:14px;line-height:1;font-family:inherit}
 .dba-pin:hover{background:rgba(127,127,127,.16);color:var(--dsw-alias-text-primary,#191919)}
 .dba-pin.dba-pin-on{color:#07c160;background:rgba(7,193,96,.14)}
+.dba-veil{position:fixed;inset:0;z-index:2147483200;background:rgba(0,0,0,.46);
+  display:flex;align-items:center;justify-content:center;padding:24px}
+.dba-lib{width:min(560px,100%);max-height:min(76vh,640px);overflow:auto;
+  background:var(--dsw-alias-bg-elevated,#fff);color:var(--dsw-alias-text-primary,#191919);
+  border:1px solid rgba(127,127,127,.28);border-radius:14px;padding:18px 18px 14px;
+  box-shadow:0 18px 60px rgba(0,0,0,.34);font-family:inherit;
+  font-size:13px;line-height:1.55}
+.dba-lib h3{margin:0 0 4px;font-size:15px;font-weight:600}
+.dba-lib p{margin:0 0 12px;color:var(--dsw-alias-text-secondary,#777);font-size:12.5px}
+.dba-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;
+  cursor:pointer;border:1px solid transparent}
+.dba-item:hover{background:rgba(127,127,127,.12)}
+.dba-item.dba-cur{border-color:rgba(7,193,96,.55);background:rgba(7,193,96,.10)}
+.dba-item .dba-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dba-badge{font-size:11px;padding:1px 7px;border-radius:999px;
+  background:rgba(127,127,127,.18);color:var(--dsw-alias-text-secondary,#777);white-space:nowrap}
+.dba-badge.dba-b-sel{background:rgba(7,193,96,.16);color:#07974b}
+.dba-meta{font-size:11.5px;color:var(--dsw-alias-text-secondary,#999);white-space:nowrap}
+.dba-mark{width:16px;text-align:center;color:#07c160;font-weight:700}
+.dba-dir{margin:12px 0 0;padding:9px 10px;border-radius:9px;background:rgba(127,127,127,.10);
+  font-size:11.5px;color:var(--dsw-alias-text-secondary,#777);word-break:break-all}
+.dba-dir code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+  color:var(--dsw-alias-text-primary,#333)}
+.dba-bar{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.dba-btn{border:1px solid rgba(127,127,127,.34);background:transparent;color:inherit;
+  border-radius:8px;padding:5px 14px;font-size:12.5px;font-family:inherit;cursor:pointer}
+.dba-btn:hover{background:rgba(127,127,127,.14)}
+.dba-msg{margin-top:10px;font-size:12px;min-height:16px;color:var(--dsw-alias-text-secondary,#777)}
+.dba-msg.dba-ok{color:#07974b}
+.dba-msg.dba-err{color:#d24a43}
 `
 
 function ensureStyle(): void {
@@ -169,7 +201,7 @@ function useCurrentSession(store: CurrentStore | null): {
   return { sessionId, isNewConversation: binding?.hooks?.session?.blankBit === true }
 }
 
-function BootOverlay({ store }: { store: CurrentStore | null }): unknown {
+function BootOverlay({ store, videoSrc }: { store: CurrentStore | null; videoSrc: string }): unknown {
   ensureStyle()
 
   const { sessionId, isNewConversation } = useCurrentSession(store)
@@ -267,7 +299,7 @@ function BootOverlay({ store }: { store: CurrentStore | null }): unknown {
     h('video', {
       ref: videoRef,
       className: 'dba-video',
-      src: VIDEO_URL,
+      src: videoSrc,
       muted: true,
       autoPlay: true,
       playsInline: true,
@@ -297,7 +329,7 @@ function BootOverlay({ store }: { store: CurrentStore | null }): unknown {
 }
 
 /** The pin toggle that lives beside Settings at the sidebar foot. */
-function PinAction({ store }: { store: CurrentStore | null }): unknown {
+function PinAction({ store, onOpen }: { store: CurrentStore | null; onOpen: () => void }): unknown {
   ensureStyle()
   const { sessionId } = useCurrentSession(store)
   const [pinned, setPinned] = useState<string | null>(() => readPinned())
@@ -315,16 +347,188 @@ function PinAction({ store }: { store: CurrentStore | null }): unknown {
     : '把这个会话设为片头会话：以后每次打开它都会播放片头动画'
 
   return h(
-    'button',
-    {
-      type: 'button',
-      className: isPinned ? 'dba-pin dba-pin-on' : 'dba-pin',
-      title,
-      'aria-label': title,
-      disabled: sessionId === null,
-      onClick: toggle,
+    'span',
+    { className: 'dba-pin-wrap', style: { display: 'inline-flex', alignItems: 'center' } },
+    h(
+      'button',
+      {
+        type: 'button',
+        className: isPinned ? 'dba-pin dba-pin-on' : 'dba-pin',
+        title,
+        'aria-label': title,
+        disabled: sessionId === null,
+        onClick: toggle,
+      },
+      isPinned ? '🎬' : '🎞',
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'dba-pin dba-lib-open',
+        title: '片头片库：查看、切换或添加片头视频',
+        'aria-label': '打开片头片库',
+        onClick: onOpen,
+      },
+      '🎛',
+    ),
+  )
+}
+
+/** One entry as the host lists it. */
+type VideoInfo = {
+  id: string
+  name: string
+  file: string
+  source: string
+  writable?: boolean
+  bytes: number
+  mtime: string
+  legacy?: boolean
+  active?: boolean
+}
+
+type VideoList = {
+  activeId: string | null
+  activeHow?: string
+  videos: VideoInfo[]
+  userDir: string
+}
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB'
+  return (n / 1024 / 1024).toFixed(2) + ' MB'
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  yours: '你自己加的',
+  shipped: '插件自带',
+  bundled: '内置原始',
+  env: '环境变量',
+}
+
+/**
+ * The video library: every .mp4 the host can see, the active one marked, and a
+ * click to switch. Adding a video stays a filesystem action — the user drops a
+ * file in and presses refresh — because a browser-side upload would have to
+ * carry the bytes through this route for no gain on a local-only plugin.
+ */
+function VideoLibrary({ onClose }: { onClose: () => void }): unknown {
+  ensureStyle()
+  const [state, setState] = useState<VideoList | null>(null)
+  const [msg, setMsg] = useState<{ text: string; kind: string }>({ text: '', kind: '' })
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const response = await fetch(LIST_URL, { cache: 'no-store' })
+      const data = (await response.json()) as VideoList
+      setState(data)
+      setMsg({ text: '', kind: '' })
+    } catch (error: unknown) {
+      setMsg({ text: '读取片库失败：' + String(error), kind: 'dba-err' })
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // Esc closes, like any other dialog in the shell.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const choose = useCallback(
+    async (id: string) => {
+      setBusy(true)
+      try {
+        const response = await fetch(SELECT_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+        const data = (await response.json()) as { ok?: boolean; error?: string; name?: string }
+        if (data.ok === true) {
+          setMsg({ text: '已切换：' + String(data.name ?? id) + '（下次播片头生效）', kind: 'dba-ok' })
+          await load()
+        } else {
+          setMsg({ text: '切换失败：' + String(data.error ?? '未知错误'), kind: 'dba-err' })
+        }
+      } catch (error: unknown) {
+        setMsg({ text: '切换失败：' + String(error), kind: 'dba-err' })
+      } finally {
+        setBusy(false)
+      }
     },
-    isPinned ? '🎬' : '🎞',
+    [load],
+  )
+
+  const videos = state === null ? [] : state.videos
+  const activeId = state === null ? null : state.activeId
+
+  return h(
+    'div',
+    {
+      className: 'dba-veil',
+      onClick: (event: { target: unknown; currentTarget: unknown; stopPropagation: () => void }) => {
+        if (event.target === event.currentTarget) onClose()
+      },
+    },
+    h(
+      'div',
+      { className: 'dba-lib', onClick: (event: { stopPropagation: () => void }) => event.stopPropagation() },
+      h('h3', null, '片头片库'),
+      h(
+        'p',
+        null,
+        '选中的那段会在下次播放片头时登场 —— 新对话、以及你钉住的会话。',
+      ),
+      ...(videos.length === 0
+        ? [h('div', { className: 'dba-item' }, h('span', { className: 'dba-nm' }, '（还没找到任何视频）'))]
+        : videos.map((v) =>
+            h(
+              'div',
+              {
+                key: v.id,
+                className: 'dba-item' + (v.id === activeId ? ' dba-cur' : ''),
+                title: v.file,
+                onClick: () => {
+                  if (!busy && v.id !== activeId) void choose(v.id)
+                },
+              },
+              h('span', { className: 'dba-mark' }, v.id === activeId ? '✓' : ''),
+              h('span', { className: 'dba-nm' }, v.name),
+              v.legacy ? h('span', { className: 'dba-badge' }, '原片源') : null,
+              h('span', { className: 'dba-badge' }, SOURCE_LABEL[v.source] ?? v.source),
+              h('span', { className: 'dba-meta' }, formatBytes(v.bytes)),
+            ),
+          )),
+      h(
+        'div',
+        { className: 'dba-dir' },
+        '想加自己的片子：把 mp4 放进这个文件夹，再点「刷新」',
+        h('br', null),
+        h('code', null, state === null ? '…' : state.userDir),
+      ),
+      h(
+        'div',
+        { className: 'dba-bar' },
+        h(
+          'button',
+          { type: 'button', className: 'dba-btn', onClick: () => void load() },
+          '刷新',
+        ),
+        h('button', { type: 'button', className: 'dba-btn', onClick: onClose }, '关闭'),
+      ),
+      h('div', { className: 'dba-msg ' + msg.kind }, msg.text),
+    ),
   )
 }
 
@@ -337,6 +541,25 @@ type ClientContext = {
   effect?: (callback: () => unknown, label?: string) => unknown
 }
 
+/**
+ * Opens the library from outside the overlay's own React tree.
+ *
+ * The pin sits in a different slot than the overlay, so it cannot share React
+ * state with the component that renders the dialog: they are two separate roots
+ * that this plugin happens to register. A module-level listener pair is the
+ * smallest honest bridge between them.
+ */
+const libraryOpeners = new Set<() => void>()
+function openLibrary(): void {
+  for (const open of libraryOpeners) {
+    try {
+      open()
+    } catch {
+      /* a stale subscriber must not break the pin */
+    }
+  }
+}
+
 export function apply(ctx: ClientContext): void {
   const candidate = ctx.uiSession?.adapter?.current
   const store =
@@ -347,14 +570,56 @@ export function apply(ctx: ClientContext): void {
       : null
   log('apply', { hasUiSession: ctx.uiSession !== undefined, hasStore: store !== null })
 
-  const Overlay = () => BootOverlay({ store })
-  const Pin = () => PinAction({ store })
+  // Rendering a JSX-free tree on purpose (createElement), so no provider
+  // element is involved. Hooks live in AppRoot, never in apply: apply is called
+  // by the plugin loader, not by React, and a hook call there would throw.
+  const AppRoot = () => {
+    const [libOpen, setLibOpen] = useState(false)
+    const [activeId, setActiveId] = useState<string | null>(null)
+
+    // Which clip plays. Fetched once so the overlay streams the user's pick, and
+    // re-fetched when the library closes so a switch takes effect immediately.
+    // The #id fragment is cosmetic: the route decides on its own and ignores it.
+    useEffect(() => {
+      let alive = true
+      void (async () => {
+        try {
+          const response = await fetch(LIST_URL, { cache: 'no-store' })
+          const data = (await response.json()) as { activeId?: string | null }
+          if (alive) setActiveId(typeof data.activeId === 'string' ? data.activeId : null)
+        } catch {
+          /* the /boot.mp4 route still serves the active clip without the id */
+        }
+      })()
+      return () => {
+        alive = false
+      }
+    }, [libOpen])
+
+    const openSelf = useCallback(() => setLibOpen(true), [])
+    useEffect(() => {
+      libraryOpeners.add(openSelf)
+      return () => {
+        libraryOpeners.delete(openSelf)
+      }
+    }, [openSelf])
+
+    const videoSrc = useMemo(
+      () => (activeId === null ? VIDEO_URL : VIDEO_URL + '#' + encodeURIComponent(activeId)),
+      [activeId],
+    )
+
+    if (libOpen) return VideoLibrary({ onClose: () => setLibOpen(false) })
+    return BootOverlay({ store, videoSrc })
+  }
+
+  const Pin = () => PinAction({ store, onOpen: () => openLibrary() })
 
   // Slot names are inlined on purpose: the injector's pre-flight check reads
   // register() calls statically and cannot follow a constant.
   const mount = () => {
     ctx.slots.inject('shell.overlay', () =>
-      ctx.slots.register({ name: 'shell.overlay', id: 'dsh-boot-animation', order: 900 }, Overlay),
+      ctx.slots.register({ name: 'shell.overlay', id: 'dsh-boot-animation', order: 900 }, AppRoot),
     )
     ctx.slots.inject('sidebar.footer.action', () =>
       ctx.slots.register(

@@ -52,17 +52,50 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 > 注意：如果刚启动时你的活动主面板不是「对话」（比如停在某个插件的面板上），
 > 当前会话还不存在，图钉是禁用状态。先打开一个对话即可。
 
-## 换自己的视频
+## 换自己的视频（片库）
 
-host 半侧按这个顺序找一个**非空文件**，并且**每次请求都重新解析**（换片子不用重启）：
+插件现在是一个**片库**，不是单个槽位：它会把所有能找到的视频都列出来，你选一个，选择会被记住。
+
+### 最省事的方式（推荐）
+
+1. 把 mp4 丢进 `~/.dsh/boot-animation/videos/`
+2. 在侧边栏页脚点 **🎛**（在 🎞 图钉旁边）打开「片头片库」
+3. 点一下你想播的那一条
+
+选中的那段会在**下一次**播放片头时登场：新对话、以及你钉住的会话。
+
+> Windows 上就是 `C:\Users\<你>\.dsh\boot-animation\videos\`
+> 具体路径以片库面板底部显示的那一行为准。
+
+### 片库面板
+
+| 元素 | 作用 |
+|---|---|
+| ✓ 标记 | 当前生效的那一条 |
+| 来源徽章 | `你自己加的` / `插件自带` / `内置原始` / `环境变量` |
+| 文件大小 | 帮你确认换对了没有 |
+| 刷新 | 刚往文件夹里丢完文件，点它重新扫描 |
+| `原片源` 徽章 | 历史上那个 `intro.mp4` 落点，仍然优先 |
+
+### 支持的格式
+
+`.mp4` `.m4v` `.webm` `.mov` `.mkv` —— 但**能不能播取决于浏览器解码**。
+H.264 + AAC 的 mp4 最稳；HEVC(H.265)、ProRes、部分 mkv 大概率只有声或黑屏。
+
+### 手动方式（老办法，仍然有效）
+
+host 半侧按这个顺序解析，**每次请求都重新解析**（换片子不用重启）：
 
 | 顺序 | 位置 |
 |---|---|
-| 1 | 环境变量 `DSH_BOOT_ANIMATION` 指向的文件 |
-| 2 | `$DSH_HOME/boot-animation/intro.mp4`（默认即 `~/.dsh/boot-animation/intro.mp4`） |
-| 3 | 包内默认的 `assets/boot.mp4` |
+| 1 | `~/.dsh/boot-animation/selection.json` 里选中的那个 id（片库面板写的） |
+| 2 | 环境变量 `DSH_BOOT_ANIMATION` 指向的文件 |
+| 3 | `~/.dsh/boot-animation/intro.mp4`（历史落点，仍优先于片库里的其他文件） |
+| 4 | `~/.dsh/boot-animation/videos/` 里最新修改的那个 |
+| 5 | 包内 `videos/` 里最新修改的那个 |
+| 6 | 包内默认的 `assets/boot.mp4` |
 
-所以最简单的换法：
+所以最保险的手动换法依然是：
 
 ```sh
 mkdir -p ~/.dsh/boot-animation
@@ -73,12 +106,25 @@ cp 我的片子.mp4 ~/.dsh/boot-animation/intro.mp4
 
 ```sh
 curl http://127.0.0.1:3080/dsh-boot-animation/status.json
+curl http://127.0.0.1:3080/dsh-boot-animation/videos.json
 ```
 
-```json
-{ "active": { "kind": "dsh-home", "bytes": 12345678 },
-  "candidates": [ { "kind": "dsh-home", "exists": true, "bytes": 12345678 },
-                  { "kind": "bundled", "exists": true, "bytes": 3252011 } ] }
+### 排错：视频是黑的 / 放着放着没了
+
+**多半是容器没做 faststart。** 如果 mp4 的索引表 `moov` 在文件末尾，浏览器必须
+**整段下完**才能解码，中间一直黑屏；而客户端有 **25 秒看门狗**（`STALL_TIMEOUT_MS`），
+超时就自己把覆盖层关掉 —— 症状就是「点开什么都没有」。
+
+用 ffmpeg 重排一下容器（**无损**，不重新编码）：
+
+```sh
+ffmpeg -i 原片.mp4 -c copy -movflags +faststart 修好的.mp4
+```
+
+验证 moov 是否前置：
+
+```sh
+ffprobe -v trace 修好的.mp4 2>&1 | grep -m1 moov   # 偏移应该很小
 ```
 
 ## 浏览器的两条硬性策略
@@ -96,13 +142,15 @@ curl http://127.0.0.1:3080/dsh-boot-animation/status.json
 | 完全没出现 | 十有八九是缓存：**Ctrl+Shift+R**。或重启一次 DSH 服务 |
 | 新对话不播 | 这个会话已经播过了（每个会话只播一次）。钉住它可变成每次都播 |
 | 钉住了也不播 | 确认图钉是绿色；确认打开的就是被钉的那个会话 |
-| 黑屏无画面 | 访问 `/dsh-boot-animation/status.json` 看有没有找到片源；再看浏览器控制台有没有解码错误 |
+| 黑屏无画面 | 先看 moov 是否前置（见上「排错：视频是黑的」）；再访问 `/dsh-boot-animation/status.json` 看片源；最后看浏览器控制台有没有解码错误 |
+| 换了片没生效 | 片库里点完要有 ✓ 才生效；确认文件在 `videos/` 里并点了「刷新」 |
+| 播到一半自己没了 | 25 秒看门狗（`STALL_TIMEOUT_MS`）超时 —— 通常还是 faststart 或解码太慢 |
 | 想看到插件在干什么 | 把 `src/client/index.ts` 顶部的 `DEBUG` 改成 `true` 重新构建，控制台会打印每次决策 |
 
 ## 实现速记（给维护者）
 
 - 挂载点：`shell.overlay`（帧级浮动层，`kind: list`，新增一格不顶替官方 UI）+
-  `sidebar.footer.action`（页脚那个图钉）
+  `sidebar.footer.action`（页脚那个图钉和 🎛 片库入口）
 - 当前会话来自 `ctx.uiSession.adapter.current` 这个 React 友好的 store。
   **它的快照不是会话记录**，而是解析后的描述符产物
   `{ key, hooks, keyedHooks, props }` —— 会话 id 在 `props.sessionId`，会话快照在 `hooks.session`
@@ -111,7 +159,15 @@ curl http://127.0.0.1:3080/dsh-boot-animation/status.json
 - 「每次点开都播」实现为**监听进入会话**这个动作，而不是记"播过没有"，
   所以被钉的会话不受"已看过"记录限制
 - 视频路由支持 **Range**（浏览器对媒体会发 Range；该给 206 却给 200 时有些播放器会拒绝播放）
+- **hook 只能在组件里调**：`apply()` 是插件加载器调的，不是 React 调的，所以状态
+  全部住在 `AppRoot` 组件内。片库入口在图钉那个 slot、对话框在 overlay 那个 slot，
+  是两个独立的 React 根，用模块级 `libraryOpeners` 订阅集合桥接
+- 片库的路由：`videos.json`（列）、`media/<id>`（按 id 流）、`select`（POST 写选择）、
+  `boot.mp4`（老路由，服务当前生效的那条，向后兼容）
+- `assets/boot.mp4` 的只读属性会让 ffmpeg/覆盖写入报 `Permission denied`：
+  `Set-ItemProperty -Name IsReadOnly -Value $false`
 
 ## 许可
 
-BSD-3-Clause，见 [LICENSE](LICENSE)。包内的 `assets/boot.mp4` 以相同条款分发。
+BSD-3-Clause，见 [LICENSE](LICENSE)。包内的 `assets/boot.mp4` 与 `videos/` 下的
+默认片源以相同条款分发。

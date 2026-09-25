@@ -4,20 +4,39 @@
  * Plain JavaScript with no DSH SDK imports, so it needs no compiler and no DSH
  * source checkout: `scripts/build.sh` copies this file to lib/index.js.
  *
- * It serves the intro video and nothing else. Two details matter:
+ * It serves the intro video and nothing else. Three details matter:
  *
  * 1. Range requests. Browsers issue them for media, and a video element that
  *    gets a 200 where it expected 206 sometimes refuses to play at all.
  *
- * 2. Three-level asset lookup, resolved PER REQUEST so a user can drop in their
- *    own file without restarting DSH:
- *      $DSH_BOOT_ANIMATION                       explicit path
- *      $DSH_HOME/boot-animation/intro.mp4        documented drop-in location
- *      <package>/assets/boot.mp4                 bundled default
+ * 2. A LIBRARY, not a single slot. The plugin used to pick one asset off a
+ *    three-level list, so adding a second video meant overwriting the first.
+ *    Now every .mp4 in every managed directory is listed, the user picks one in
+ *    the UI, and the choice is remembered. The old three-level priority is kept
+ *    as the fallback when nothing has been picked, so an existing drop-in
+ *    (`$DSH_HOME/boot-animation/intro.mp4`) keeps working untouched.
+ *
+ * 3. Everything is resolved PER REQUEST, so a user can drop in their own file
+ *    without restarting DSH.
+ *
+ * Layout:
+ *   $DSH_HOME/boot-animation/selection.json   which id plays (written by us)
+ *   $DSH_HOME/boot-animation/videos/*.mp4     user library (drop-in)
+ *   $DSH_HOME/boot-animation/intro.mp4        legacy drop-in, still honoured
+ *   <package>/videos/*.mp4                    shipped library
+ *   <package>/assets/boot.mp4                 bundled default / legacy fallback
  */
-import { createReadStream, statSync } from 'node:fs'
+import {
+  createReadStream,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-boot-animation'
@@ -26,75 +45,279 @@ export const name = 'dsh-boot-animation'
 export const inject = ['webServer']
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-/** lib/index.js -> package root -> assets/boot.mp4 */
-const BUNDLED = join(HERE, '..', 'assets', 'boot.mp4')
-const ROUTE = '/dsh-boot-animation/boot.mp4'
-const STATUS_ROUTE = '/dsh-boot-animation/status.json'
+/** lib/index.js -> package root */
+const PKG_ROOT = join(HERE, '..')
+const BUNDLED = join(PKG_ROOT, 'assets', 'boot.mp4')
+const PKG_VIDEOS = join(PKG_ROOT, 'videos')
+
+const BASE_ROUTE = '/dsh-boot-animation'
+const ROUTE = BASE_ROUTE + '/boot.mp4'
+const MEDIA_ROUTE = BASE_ROUTE + '/media/'
+const LIST_ROUTE = BASE_ROUTE + '/videos.json'
+const SELECT_ROUTE = BASE_ROUTE + '/select'
+const STATUS_ROUTE = BASE_ROUTE + '/status.json'
 const CONTENT_TYPE = 'video/mp4'
 
-/** Candidate sources, most specific first. */
-function candidates() {
-  const list = []
-  const fromEnv = process.env.DSH_BOOT_ANIMATION
-  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
-    list.push({ kind: 'env', path: fromEnv.trim() })
-  }
-  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  list.push({ kind: 'dsh-home', path: join(home, 'boot-animation', 'intro.mp4') })
-  list.push({ kind: 'bundled', path: BUNDLED })
-  return list
+/** Extensions treated as video for listing purposes. */
+const VIDEO_EXT = new Set(['.mp4', '.m4v', '.webm', '.mov', '.mkv'])
+
+const HOME = () => process.env.DSH_HOME ?? join(homedir(), '.dsh')
+const HOME_DIR = () => join(HOME(), 'boot-animation')
+const SELECTION_FILE = () => join(HOME_DIR(), 'selection.json')
+
+/**
+ * Managed directories, most specific first. `source` is what the UI shows.
+ * `bundled` is last so a user file always wins a tie by id order.
+ */
+function scanDirs() {
+  return [
+    { source: 'yours', dir: join(HOME_DIR(), 'videos'), writable: true },
+    { source: 'yours', dir: HOME_DIR(), writable: true },
+    { source: 'shipped', dir: PKG_VIDEOS, writable: false },
+    { source: 'bundled', dir: join(PKG_ROOT, 'assets'), writable: false },
+  ]
 }
 
-/** First existing, non-empty candidate; resolved on every request. */
-function resolveVideo() {
-  for (const candidate of candidates()) {
+function statFile(p) {
+  try {
+    const s = statSync(p)
+    return s.isFile() && s.size > 0 ? s : null
+  } catch {
+    return null
+  }
+}
+
+/** Stable, URL-safe id for a path. Deterministic across processes (no hash lib). */
+function makeId(p) {
+  let h = 0x811c9dc5
+  const normalised = p.replace(/\\/g, '/').toLowerCase()
+  for (let i = 0; i < normalised.length; i += 1) {
+    h ^= normalised.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  const stem = basename(p, extname(p))
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+  return (stem || 'video') + '-' + h.toString(16).padStart(8, '0')
+}
+
+function readSelection() {
+  try {
+    const raw = readFileSyncSafe(SELECTION_FILE())
+    if (raw === null) return null
+    const parsed = JSON.parse(raw)
+    return typeof parsed?.id === 'string' && parsed.id !== '' ? parsed.id : null
+  } catch {
+    return null
+  }
+}
+
+function readFileSyncSafe(p) {
+  try {
+    return readFileSync(p, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+function writeSelection(id) {
+  const dir = HOME_DIR()
+  mkdirSync(dir, { recursive: true })
+  const payload = JSON.stringify({ id, at: new Date().toISOString() }, null, 2)
+  const target = SELECTION_FILE()
+  const tmp = target + '.tmp'
+  writeFileSync(tmp, payload, 'utf8')
+  // Atomic-ish: a half-written selection.json would silently reset the pick.
+  try {
+    renameSync(tmp, target)
+  } catch {
+    writeFileSync(target, payload, 'utf8')
+  }
+}
+
+/**
+ * Every video currently on disk, de-duplicated by real path so `intro.mp4`
+ * does not appear twice (its directory is also a scan root).
+ */
+function listVideos() {
+  const seen = new Set()
+  const out = []
+  for (const { source, dir, writable } of scanDirs()) {
+    let names = []
     try {
-      const stats = statSync(candidate.path)
-      if (stats.isFile() && stats.size > 0) return { ...candidate, size: stats.size }
+      names = readdirSync(dir)
     } catch {
-      /* missing or unreadable: try the next one */
+      continue
+    }
+    for (const fileName of names) {
+      const ext = extname(fileName).toLowerCase()
+      if (!VIDEO_EXT.has(ext)) continue
+      const full = join(dir, fileName)
+      const key = full.replace(/\\/g, '/').toLowerCase()
+      if (seen.has(key)) continue
+      const stats = statFile(full)
+      if (stats === null) continue
+      seen.add(key)
+      out.push({
+        id: makeId(full),
+        name: basename(fileName, extname(fileName)),
+        file: fileName,
+        ext,
+        source,
+        writable,
+        bytes: stats.size,
+        mtimeMs: stats.mtimeMs,
+        mtime: new Date(stats.mtimeMs).toISOString(),
+        legacy: fileName.toLowerCase() === 'intro.mp4',
+        path: full,
+      })
     }
   }
-  return null
+  // Newest first inside each source, but keep source precedence stable.
+  const rank = { yours: 0, shipped: 1, bundled: 2 }
+  out.sort((a, b) => (rank[a.source] ?? 9) - (rank[b.source] ?? 9) || b.mtimeMs - a.mtimeMs)
+  return out
 }
 
-function sendJson(res, payload) {
+/**
+ * Which video plays. An explicit pick wins; otherwise the historical
+ * three-level priority, so nothing that worked before stops working.
+ */
+function resolveActive() {
+  const videos = listVideos()
+  const picked = readSelection()
+  if (picked !== null) {
+    const hit = videos.find((v) => v.id === picked)
+    if (hit) return { video: hit, how: 'selected', videos }
+    // Picked file was deleted: fall through rather than show nothing.
+  }
+
+  const fromEnv = process.env.DSH_BOOT_ANIMATION
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
+    const candidates = listVideos().find((v) => v.path === fromEnv.trim())
+    if (candidates) return { video: candidates, how: 'env', videos }
+    const stats = statFile(fromEnv.trim())
+    if (stats !== null) {
+      return {
+        video: {
+          id: makeId(fromEnv.trim()),
+          name: basename(fromEnv.trim(), extname(fromEnv.trim())),
+          file: basename(fromEnv.trim()),
+          ext: extname(fromEnv.trim()).toLowerCase(),
+          source: 'env',
+          writable: false,
+          bytes: stats.size,
+          mtimeMs: stats.mtimeMs,
+          mtime: new Date(stats.mtimeMs).toISOString(),
+          legacy: false,
+          path: fromEnv.trim(),
+        },
+        how: 'env',
+        videos,
+      }
+    }
+  }
+
+  const legacyDropIn = videos.find((v) => v.source === 'yours' && v.legacy)
+  if (legacyDropIn) return { video: legacyDropIn, how: 'legacy-dropin', videos }
+
+  const yours = videos.find((v) => v.source === 'yours')
+  if (yours) return { video: yours, how: 'library', videos }
+
+  const shipped = videos.find((v) => v.source === 'shipped')
+  if (shipped) return { video: shipped, how: 'library', videos }
+
+  const bundled = videos.find((v) => v.source === 'bundled')
+  if (bundled) return { video: bundled, how: 'bundled', videos }
+
+  // Nothing in the managed dirs: still honour a literal bundled path, because
+  // the package ships assets/boot.mp4 even if it were filtered out above.
+  const stats = statFile(BUNDLED)
+  if (stats !== null) {
+    return {
+      video: {
+        id: makeId(BUNDLED),
+        name: 'boot',
+        file: 'boot.mp4',
+        ext: '.mp4',
+        source: 'bundled',
+        writable: false,
+        bytes: stats.size,
+        mtimeMs: stats.mtimeMs,
+        mtime: new Date(stats.mtimeMs).toISOString(),
+        legacy: false,
+        path: BUNDLED,
+      },
+      how: 'bundled',
+      videos,
+    }
+  }
+  return { video: null, how: 'none', videos }
+}
+
+function findById(id) {
+  if (id === 'active') {
+    const active = resolveActive()
+    return active.video
+  }
+  return listVideos().find((v) => v.id === id) ?? null
+}
+
+function sendJson(res, payload, status = 200) {
   const body = JSON.stringify(payload, null, 2)
-  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
   res.end(body)
+}
+
+function publicVideo(v, extra = {}) {
+  return {
+    id: v.id,
+    name: v.name,
+    file: v.file,
+    source: v.source,
+    writable: v.writable,
+    bytes: v.bytes,
+    mtime: v.mtime,
+    legacy: v.legacy,
+    ...extra,
+  }
+}
+
+function serveList(res) {
+  const { video, how, videos } = resolveActive()
+  sendJson(res, {
+    activeId: video === null ? null : video.id,
+    activeHow: how,
+    videos: videos.map((v) => publicVideo(v, { active: video !== null && v.id === video.id })),
+    userDir: join(HOME_DIR(), 'videos'),
+    accepts: [...VIDEO_EXT],
+  })
 }
 
 function serveStatus(res) {
   // Deliberately reports WHICH slot is active without echoing absolute paths
   // back to anything that can reach this port.
-  const active = resolveVideo()
+  const { video, how, videos } = resolveActive()
   sendJson(res, {
-    active: active === null ? null : { kind: active.kind, bytes: active.size },
-    candidates: candidates().map((candidate) => {
-      let exists = false
-      let bytes = 0
-      try {
-        const stats = statSync(candidate.path)
-        exists = stats.isFile() && stats.size > 0
-        bytes = stats.size
-      } catch {
-        exists = false
-      }
-      return { kind: candidate.kind, exists, bytes }
-    }),
-    lookupOrder: 'DSH_BOOT_ANIMATION -> $DSH_HOME/boot-animation/intro.mp4 -> bundled assets/boot.mp4',
+    active: video === null ? null : { kind: how, id: video.id, name: video.name, bytes: video.bytes },
+    count: videos.length,
+    videos: videos.map((v) => publicVideo(v, { active: video !== null && v.id === video.id })),
+    // Legacy fields, kept because README and older probes read them.
+    candidates: [
+      { kind: 'selection', exists: readSelection() !== null, bytes: 0 },
+      { kind: 'library', exists: videos.length > 0, bytes: videos.length },
+      { kind: 'bundled', exists: statFile(BUNDLED) !== null, bytes: statFile(BUNDLED)?.size ?? 0 },
+    ],
+    lookupOrder: 'selection.json -> DSH_BOOT_ANIMATION -> $DSH_HOME/boot-animation/intro.mp4 -> $DSH_HOME/boot-animation/videos -> shipped/bundled',
   })
 }
 
-function serveVideo(req, res) {
-  const active = resolveVideo()
-  if (active === null) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('dsh-boot-animation: no video found (set DSH_BOOT_ANIMATION or add $DSH_HOME/boot-animation/intro.mp4)')
-    return
-  }
-
-  const size = active.size
+/** Stream a file with Range support. Shared by every media route. */
+function streamFile(req, res, filePath, size) {
   const range = req.headers.range
   if (typeof range === 'string') {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim())
@@ -133,7 +356,7 @@ function serveVideo(req, res) {
         res.end()
         return
       }
-      createReadStream(active.path, { start, end }).pipe(res)
+      createReadStream(filePath, { start, end }).pipe(res)
       return
     }
   }
@@ -148,13 +371,98 @@ function serveVideo(req, res) {
     res.end()
     return
   }
-  createReadStream(active.path).pipe(res)
+  createReadStream(filePath).pipe(res)
+}
+
+/** The historical single-video route: whatever is active right now. */
+function serveVideo(req, res) {
+  const { video } = resolveActive()
+  if (video === null) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end(
+      'dsh-boot-animation: no video found (drop an .mp4 into ' +
+        join(HOME_DIR(), 'videos') +
+        ', set DSH_BOOT_ANIMATION, or add $DSH_HOME/boot-animation/intro.mp4)',
+    )
+    return
+  }
+  streamFile(req, res, video.path, video.bytes)
+}
+
+/** One specific video from the library, by id. */
+function serveMedia(req, res, url) {
+  const path = url.split('?')[0]
+  const id = decodeURIComponent(path.slice(MEDIA_ROUTE.length))
+  const video = findById(id)
+  if (video === null) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('dsh-boot-animation: no such video id')
+    return
+  }
+  streamFile(req, res, video.path, video.bytes)
+}
+
+/** POST /select  { "id": "..." }  — remembers the user's choice. */
+function handleSelect(req, res) {
+  if (req.method !== 'POST') {
+    sendJson(res, { ok: false, error: 'POST required' }, 405)
+    return
+  }
+  let body = ''
+  req.on('data', (chunk) => {
+    body += chunk
+    if (body.length > 8192) req.destroy()
+  })
+  req.on('end', () => {
+    let id = null
+    try {
+      id = JSON.parse(body)?.id ?? null
+    } catch {
+      sendJson(res, { ok: false, error: 'invalid JSON body' }, 400)
+      return
+    }
+    if (typeof id !== 'string' || id === '') {
+      sendJson(res, { ok: false, error: 'id must be a non-empty string' }, 400)
+      return
+    }
+    const video = listVideos().find((v) => v.id === id) ?? null
+    if (video === null) {
+      sendJson(res, { ok: false, error: 'no video with that id' }, 404)
+      return
+    }
+    try {
+      writeSelection(video.id)
+    } catch (error) {
+      sendJson(res, { ok: false, error: 'could not save selection: ' + String(error?.message ?? error) }, 500)
+      return
+    }
+    sendJson(res, { ok: true, activeId: video.id, name: video.name })
+  })
+  req.on('error', () => {
+    try {
+      sendJson(res, { ok: false, error: 'request error' }, 400)
+    } catch {
+      /* socket already gone */
+    }
+  })
 }
 
 export function apply(ctx) {
   ctx.effect(
     () => ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: serveVideo }),
     'dsh-boot-animation: boot video',
+  )
+  ctx.effect(
+    () => ctx.webServer.register({ kind: 'prefix', path: MEDIA_ROUTE, handler: serveMedia }),
+    'dsh-boot-animation: video library',
+  )
+  ctx.effect(
+    () => ctx.webServer.register({ kind: 'prefix', path: LIST_ROUTE, handler: (_req, res) => serveList(res) }),
+    'dsh-boot-animation: video list',
+  )
+  ctx.effect(
+    () => ctx.webServer.register({ kind: 'prefix', path: SELECT_ROUTE, handler: handleSelect }),
+    'dsh-boot-animation: select video',
   )
   ctx.effect(
     () => ctx.webServer.register({ kind: 'prefix', path: STATUS_ROUTE, handler: (_req, res) => serveStatus(res) }),
