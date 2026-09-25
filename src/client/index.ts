@@ -27,6 +27,7 @@
  * and a click then unmutes AND enters real fullscreen.
  */
 
+import type { ReactElement } from 'react'
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 /** Slot service for both seats, ui-session for the current conversation. */
@@ -201,7 +202,13 @@ function useCurrentSession(store: CurrentStore | null): {
   return { sessionId, isNewConversation: binding?.hooks?.session?.blankBit === true }
 }
 
-function BootOverlay({ store, videoSrc }: { store: CurrentStore | null; videoSrc: string }): unknown {
+function BootOverlay({
+  store,
+  videoSrc,
+}: {
+  store: CurrentStore | null
+  videoSrc: string
+}): ReactElement | null {
   ensureStyle()
 
   const { sessionId, isNewConversation } = useCurrentSession(store)
@@ -415,7 +422,7 @@ const SOURCE_LABEL: Record<string, string> = {
  * file in and presses refresh — because a browser-side upload would have to
  * carry the bytes through this route for no gain on a local-only plugin.
  */
-function VideoLibrary({ onClose }: { onClose: () => void }): unknown {
+function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
   ensureStyle()
   const [state, setState] = useState<VideoList | null>(null)
   const [msg, setMsg] = useState<{ text: string; kind: string }>({ text: '', kind: '' })
@@ -609,11 +616,16 @@ export function apply(ctx: ClientContext): void {
       [activeId],
     )
 
-    if (libOpen) return VideoLibrary({ onClose: () => setLibOpen(false) })
-    return BootOverlay({ store, videoSrc })
+    // Rendered as ELEMENTS, never called as plain functions. Calling a
+    // component directly would run its hooks against AppRoot's own hook list,
+    // so toggling the library would change AppRoot's hook count between renders
+    // and React would throw "Rendered more hooks than during the previous
+    // render" the moment the picker opened.
+    if (libOpen) return h(VideoLibrary, { onClose: () => setLibOpen(false) })
+    return h(BootOverlay, { store, videoSrc })
   }
 
-  const Pin = () => PinAction({ store, onOpen: () => openLibrary() })
+  const Pin = () => h(PinAction, { store, onOpen: () => openLibrary() })
 
   // Slot names are inlined on purpose: the injector's pre-flight check reads
   // register() calls statically and cannot follow a constant.
