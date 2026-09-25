@@ -132,6 +132,40 @@ const list = JSON.parse((await expect(`${BASE}/videos.json`, 200)).body ?? '{"vi
 const ids = Array.isArray(list.videos) ? list.videos.map((v) => v.id) : []
 console.log(`library: ${ids.length} video(s) — ${ids.join(', ')}`)
 
+/**
+ * The list must show DISTINCT clips, not distinct paths.
+ *
+ * A user who also keeps their own copy of a shipped clip saw it twice under two
+ * different badges, which read as "the plugin does not have this clip". The list
+ * collapses identical artifacts (size+mtime) and reports how many it merged, so
+ * a hidden duplicate is visible in the payload rather than silent.
+ */
+{
+  const seen = new Map()
+  let ok = true
+  for (const v of list.videos ?? []) {
+    const identity = `${v.bytes}@${new Date(v.mtime).getTime()}`
+    if (seen.has(identity)) {
+      console.log(`  FAIL ${v.id} duplicates ${seen.get(identity)} (${v.bytes} bytes, ${v.mtime})`)
+      failures.push(`two library rows share one artifact: ${v.id} and ${seen.get(identity)}`)
+      ok = false
+      continue
+    }
+    seen.set(identity, v.id)
+  }
+  const merged = (list.videos ?? []).filter((v) => (v.copies ?? 1) > 1)
+  console.log(
+    `  ${ok ? 'ok  ' : 'FAIL'} library has ${seen.size} distinct artifact(s)` +
+      (merged.length > 0 ? `; merged duplicate(s): ${merged.map((v) => `${v.id}(x${v.copies})`).join(', ')}` : ''),
+  )
+  // A merged row must not claim to be a single path either.
+  for (const v of merged) {
+    if (!Array.isArray(v.alsoAt) || v.alsoAt.length === 0) {
+      failures.push(`${v.id} advertises copies=${v.copies} but lists no alsoAt sources`)
+    }
+  }
+}
+
 await expect(`${BASE}/status.json`, 200)
 await expect(`${BASE}/boot.mp4`, 200)
 for (const id of ids) await expect(`${BASE}/media/${id}`, 200)

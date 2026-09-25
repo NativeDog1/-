@@ -71,6 +71,15 @@ const CONTENT_TYPE = 'video/mp4'
 /** Extensions treated as video for listing purposes. */
 const VIDEO_EXT = new Set(['.mp4', '.m4v', '.webm', '.mov', '.mkv'])
 
+/**
+ * Which copy survives when the same clip exists in more than one place.
+ * Lower wins, so the plugin's own copy beats a user's duplicate.
+ */
+const SOURCE_RANK = { bundled: 0, shipped: 1, yours: 2, env: 3 }
+
+/** Display order in the picker: the plugin's clips first, the user's after. */
+const LIST_RANK = { shipped: 0, bundled: 1, yours: 2, env: 3 }
+
 const HOME = () => process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const HOME_DIR = () => join(HOME(), 'boot-animation')
 const SELECTION_FILE = () => join(HOME_DIR(), 'selection.json')
@@ -213,12 +222,31 @@ function writeSelection(id) {
 }
 
 /**
- * Every video currently on disk, de-duplicated by real path so `intro.mp4`
- * does not appear twice (its directory is also a scan root).
+ * Every distinct clip on disk.
+ *
+ * Two de-duplications happen here, and both exist because the picker was
+ * showing more rows than there were videos:
+ *
+ * 1. By real path, so `intro.mp4` is not listed twice (its directory is also a
+ *    scan root).
+ * 2. By CONTENT — size plus mtime — so a copy of the same clip in two places is
+ *    one row, not two. This is the case that actually confused a user: the
+ *    plugin ships a clip and they also have their own copy of it, so the picker
+ *    showed one clip as two entries under two different badges, and it read as
+ *    "these are not the same kind of thing".
+ *
+ *    Size+mtime rather than a hash: both are already in hand, and a copied file
+ *    keeps its source mtime, so a duplicate matches. Two genuinely different
+ *    videos sharing both is not a realistic collision, and the entry records how
+ *    many paths it merged so the count is never silently wrong.
+ *
+ *    When copies collide, the plugin's own copy wins: it is the one that ships
+ *    and cannot be deleted out from under the selection. The user's file is
+ *    left exactly where it is — collapsed in the LIST, never on disk.
  */
 function listVideos() {
   const seen = new Set()
-  const out = []
+  const found = []
   for (const { source, dir, writable } of scanDirs()) {
     let names = []
     try {
@@ -235,7 +263,7 @@ function listVideos() {
       const stats = statFile(full)
       if (stats === null) continue
       seen.add(key)
-      out.push({
+      found.push({
         id: makeId(full),
         name: displayName(source, fileName),
         file: fileName,
@@ -248,12 +276,30 @@ function listVideos() {
         legacy: fileName.toLowerCase() === 'intro.mp4',
         faststart: hasFaststart(full),
         path: full,
+        copies: 1,
+        alsoAt: [],
       })
     }
   }
-  // Newest first inside each source, but keep source precedence stable.
-  const rank = { yours: 0, shipped: 1, bundled: 2 }
-  out.sort((a, b) => (rank[a.source] ?? 9) - (rank[b.source] ?? 9) || b.mtimeMs - a.mtimeMs)
+
+  const byContent = new Map()
+  for (const video of found) {
+    const identity = `${video.bytes}@${Math.round(video.mtimeMs)}`
+    const kept = byContent.get(identity)
+    if (kept === undefined) {
+      byContent.set(identity, video)
+      continue
+    }
+    const keepNew = (SOURCE_RANK[video.source] ?? 9) < (SOURCE_RANK[kept.source] ?? 9)
+    const winner = keepNew ? video : kept
+    const loser = keepNew ? kept : video
+    winner.copies += loser.copies
+    winner.alsoAt.push(loser.source, ...loser.alsoAt)
+    byContent.set(identity, winner)
+  }
+
+  const out = [...byContent.values()]
+  out.sort((a, b) => (LIST_RANK[a.source] ?? 9) - (LIST_RANK[b.source] ?? 9) || b.mtimeMs - a.mtimeMs)
   return out
 }
 
@@ -379,6 +425,10 @@ function publicVideo(v, extra = {}) {
     mtime: v.mtime,
     legacy: v.legacy,
     faststart: v.faststart === true,
+    // How many on-disk copies collapsed into this row, and where the others
+    // live. Reported so a collapsed duplicate is visible rather than mysterious.
+    copies: v.copies ?? 1,
+    alsoAt: v.alsoAt ?? [],
     ...extra,
   }
 }

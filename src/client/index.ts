@@ -457,6 +457,8 @@ type VideoInfo = {
   mtime: string
   legacy?: boolean
   faststart?: boolean
+  copies?: number
+  alsoAt?: string[]
   active?: boolean
 }
 
@@ -588,6 +590,19 @@ function VideoLibrary({ onClose, onPreview }: { onClose: () => void; onPreview: 
               h('span', { className: 'dba-mark' }, v.id === activeId ? '✓' : ''),
               h('span', { className: 'dba-nm' }, v.name),
               v.legacy ? h('span', { className: 'dba-badge' }, '原片源') : null,
+              (v.copies ?? 1) > 1
+                ? h(
+                    'span',
+                    {
+                      className: 'dba-badge',
+                      title:
+                        '这一段在磁盘上有 ' +
+                        String(v.copies) +
+                        ' 份相同的副本，已合并成一条。你的文件没有被删，只是不重复列出。',
+                    },
+                    '合并 ' + String(v.copies) + ' 份重复',
+                  )
+                : null,
               // Only nudges on containers that can carry moov. A .webm has none,
               // so "not optimised" would be a lie about it.
               (v.ext === '.mp4' || v.ext === '.m4v') && v.faststart === false
