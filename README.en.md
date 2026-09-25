@@ -13,8 +13,13 @@ you pinned — a video plays full-frame in the app window.
 ## Install
 
 ```sh
-dsh plugin --profile web add dsh-boot-animation
+dsh plugin --profile web add github:NativeDog1/-
 ```
+
+> The built output (`lib/`) is committed and the package has no `prepare`
+> lifecycle script, so this installs **without compiling anything** and without
+> tripping pnpm's `allowBuilds` build-approval prompt.
+> (Once the package is on npm, `dsh plugin --profile web add dsh-boot-animation` works too.)
 
 Then **restart the DSH service once** — bundle layers are assembled at boot:
 

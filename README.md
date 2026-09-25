@@ -12,8 +12,12 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-boot-animation
+dsh plugin --profile web add github:NativeDog1/-
 ```
+
+> 仓库里已经提交了构建产物 `lib/`，也没有 `prepare` 生命周期脚本，
+> 所以这条命令**不编译任何东西**，不会触发 pnpm 的 `allowBuilds` 构建授权。
+> （等包发布到 npm 之后，也可以写成 `dsh plugin --profile web add dsh-boot-animation`。）
 
 装完**必须重启一次 DSH 服务**才生效（bundle 层是在启动时装配的）：
 
