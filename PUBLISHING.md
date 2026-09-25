@@ -1,19 +1,21 @@
 # 发布现状与投稿清单
 
-**结论：代码侧全部就绪，只差把一份 7 行的 YAML 提成 PR。**
+**结论：代码侧全部就绪。剩下两件事——① 在 GitHub 上把仓库改名为 `dsh-boot-animation`（1 次点击），
+② 提交市场条目 PR。**
 
 插件市场不是本项目，而是一个由数据文件生成的大仓库：
 
 - 市场前端读的注册表：`https://awesome-dsh-plugin.com/plugins.json`（当前 **4323** 条）
 - 数据源仓库：`https://github.com/awesome-dsh-plugin/awesome-dsh-plugin`
-- **一次投稿 = 往那个仓库加一个文件**：`data/plugins/NativeDog1__-.yml`
+- **一次投稿 = 往那个仓库加一个文件**：`data/plugins/NativeDog1__dsh-boot-animation.yml`
 
-文件名不是随便起的，它由 url 推导：`owner/repo` → `owner__repo`。本插件即 `NativeDog1__-.yml`。
+文件名不是随便起的，它由 url 推导：`owner/repo` → `owner__repo`。
+本插件即 `NativeDog1` + `dsh-boot-animation` → `NativeDog1__dsh-boot-animation.yml`。
 
 要提交的内容已经放在本仓库里，原样复制即可：
 
 ```
-submission/data/plugins/NativeDog1__-.yml
+submission/data/plugins/NativeDog1__dsh-boot-animation.yml
 ```
 
 ---
@@ -61,10 +63,14 @@ submission/data/plugins/NativeDog1__-.yml
 两条合起来意味着，别人执行
 
 ```sh
-dsh plugin add github:NativeDog1/-
+dsh plugin add github:NativeDog1/dsh-boot-animation
 ```
 
 时**不触发任何编译**，也就**不会撞上 pnpm 的 `allowBuilds` 构建授权**——这是从源码安装最常见的失败点。
+
+> 这一点是**实测过**的，不是推断：`npm pack github:NativeDog1/...` 成功解析 git spec、
+> 克隆并打出 **11 个文件 / 3.3 MB** 的 tarball，含 `lib/client.js`、`lib/index.js`、
+> `cordis.patch.yml`、`assets/boot.mp4`，全程没有跑任何构建脚本。
 
 `tarball:` 字段只在「仓库根本无法从源码安装」时才是必需的，本仓库不是这种情况。
 
@@ -73,20 +79,33 @@ dsh plugin add github:NativeDog1/-
 
 ---
 
-## 三、现在要做的（唯一必要动作）
+## 三、现在要做的
 
-### 提交市场条目
+### 步骤 0（先做）— 把仓库改名
+
+仓库当前叫 `https://github.com/NativeDog1/-`（一个减号）。**必须改成 `dsh-boot-animation`**，
+因为市场条目的 `url` 会被闸门持续复查，条目一旦上架再改名就会失效并被摘掉。
+
+> GitHub → 仓库 → **Settings** → General → **Repository name** 填 `dsh-boot-animation` → **Rename**
+
+改完地址是 `https://github.com/NativeDog1/dsh-boot-animation`。
+本仓库里 `package.json` 的 `repository` / `homepage` / `bugs`、两个 README 的安装命令、
+`submission/` 的条目内容与文件名**都已经按新名字改好了**，改名后全部自动对上。
+
+（GitHub 会为旧地址保留重定向，所以本地 `git remote` 即使还写着旧名字也照样能推。）
+
+### 步骤 1 — 提交市场条目
 
 **方式 A — 网页，约 1 分钟，不需要命令行**
 
 1. 打开 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/fork> → **Create fork**
 2. 在你自己那份 fork 里：**Add file** → **Create new file**
-3. 文件名填：`data/plugins/NativeDog1__-.yml`
+3. 文件名填：`data/plugins/NativeDog1__dsh-boot-animation.yml`
 4. 内容粘贴下面这段（与 `submission/` 里那份完全一致）：
 
 ```yaml
-url: https://github.com/NativeDog1/-
-name: NativeDog1/-
+url: https://github.com/NativeDog1/dsh-boot-animation
+name: NativeDog1/dsh-boot-animation
 category: ui
 description:
   en: 'Plays a full-frame intro video when a new conversation starts, or every time you open the conversation you pinned — a real 720p clip with a pin button beside Settings, replaceable with your own file via DSH_BOOT_ANIMATION or the DSH home directory.'
@@ -94,7 +113,7 @@ description:
 ```
 
 5. **Commit changes** → 回到 fork 首页，点 **Contribute** → **Open pull request**
-6. 标题随意，例如 `Add NativeDog1/- (dsh-boot-animation)`
+6. 标题随意，例如 `Add NativeDog1/dsh-boot-animation`
 
 > ⚠️ 只交这一个 `.yml`。**不要手工改 `README.md` / `README.zh.md`** ——
 > 它们由 `data/plugins/*.yml` 生成，合并后会在 `main` 上自动重新生成。
@@ -105,20 +124,25 @@ description:
 ```sh
 git clone https://github.com/<你的用户名>/awesome-dsh-plugin.git
 cd awesome-dsh-plugin
-cp <本项目>/submission/data/plugins/NativeDog1__-.yml data/plugins/
-git add data/plugins/NativeDog1__-.yml
-git commit -m "Add NativeDog1/- (dsh-boot-animation)"
+cp <本项目>/submission/data/plugins/NativeDog1__dsh-boot-animation.yml data/plugins/
+git add data/plugins/NativeDog1__dsh-boot-animation.yml
+git commit -m "Add NativeDog1/dsh-boot-animation"
 git push
 ```
 
 然后在 GitHub 上点 Compare & pull request。
 
+### 步骤 2 — 等它转绿
+
+PR 上的年龄闸门现在会红。本地时间 **2026-09-26 17:40** 之后它自己重跑、自己变绿，
+维护者合并后市场就会收录（市场每次打开都实时拉取注册表，通常一天内生效）。
+
 ---
 
 ## 四、提交市场条目的字段规则（这些坑都踩过）
 
-来自 `scripts/lib/entries.mjs` 的 `validateEntries()` —— 本地已用真校验器跑过，
-`NativeDog1__-.yml` 结果是**零问题**。
+来自 `scripts/lib/entries.mjs` 的 `validateEntries()` —— 本地已用**真校验器**跑过，
+`NativeDog1__dsh-boot-animation.yml` 结果是**零问题**。
 
 - **只允许 6 个键**：`url` / `name` / `category` / `description` / `tarball` / `file`（`file` 由脚本加）。
   **多一个键就判不合格。** 特别是 `npm:` 是**禁止**的——npm 包由脚本从仓库自动解析
@@ -127,6 +151,7 @@ git push
 - 文件名必须**恰好等于** `owner__repo`，且必须位于 `data/plugins/`、**恰好一层**
   （写成 `data/<owner>__<repo>.yml` 或 `data/plugins/data/plugins/...` 都会被静默忽略：
   不报错、README 也不生成、合并了却什么都没发生）。
+- `name` 若写成 `owner/repo` 形式，**必须与 url 指向同一个仓库**（链接文字不能与目标不符）。
 - `description.en` **必填**、必须**单行**、必须以英文句号结尾。
 - `description.zh` **可选**——缺了维护者会补，不作为打回理由。
 - 描述中出现 `: `（英文冒号+空格）**必须加引号**，否则 YAML 会把它当成嵌套键。
@@ -176,20 +201,21 @@ git push --force
 
 ---
 
-## 七、⚠️ 关于仓库名
+## 七、市场为什么必须在「精选列表」里
 
-当前仓库名是一个减号：`https://github.com/NativeDog1/-`，市场列表里会显示成 **`NativeDog1/-`**。
+你界面里的插件市场是 `dshmarket`（v1.55.0）。它自己的 README 写得很明确：
 
-**现在改名是免费的**（仓库刚建、没有 fork、没有 star、没有外部引用），
-而且 `package.json` 里 `repository` / `homepage` / `bugs` 三个字段早已按
-`dsh-boot-animation` 写好 —— 一旦改名就自动全部对上。
+> **本仓库是市场应用，不是插件目录。** 插件列表来自精选列表
+> [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)——
+> 想让你的插件上架，请去**那边**提 PR（在列表里加一条即可，站点和本市场会自动收录，通常一天内生效）。
 
-**但列进市场之后再改名就麻烦了**：条目的 `url` 会失效，而闸门是持续重跑的，
-失效的条目会被摘掉，届时需要再提一个 PR 去改 `url` 和文件名。
+> 每次打开都实时请求 `awesome-dsh-plugin.com/plugins.json`……精选条目、npm 映射、star 数由 CI 每日刷新，
+> **不使用过期缓存兜底**。
 
-所以：**如果你在意列表里显示成 `NativeDog1/-`，请在开 PR 之前改名。**
-改名的连带修改（`package.json` 3 处、`submission/` 文件内容与文件名、本文件、git remote）
-一条命令即可全部改完。
+> 只允许安装**精选列表内**的来源，其它一律拒绝。
+
+所以因果关系是：**PR 被合并 → 列表 `main` 更新 → CI 重新生成 `plugins.json` → 市场里就能搜到、并且能一键安装。**
+换句话说，被这个列表收录**正是**「市场里一键安装」的前置条件。
 
 ---
 
@@ -199,7 +225,7 @@ git push --force
 
 ```sh
 dsh --profile smoketest --from-default-profile web
-dsh plugin --profile smoketest add github:NativeDog1/-
+dsh plugin --profile smoketest add github:NativeDog1/dsh-boot-animation
 ```
 
 启动后**硬刷新（Ctrl+Shift+R）**，确认侧边栏页脚出现 🎞 片头动画按钮。

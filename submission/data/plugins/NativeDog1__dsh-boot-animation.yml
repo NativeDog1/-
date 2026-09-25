@@ -1,5 +1,5 @@
-url: https://github.com/NativeDog1/-
-name: NativeDog1/-
+url: https://github.com/NativeDog1/dsh-boot-animation
+name: NativeDog1/dsh-boot-animation
 category: ui
 description:
   en: 'Plays a full-frame intro video when a new conversation starts, or every time you open the conversation you pinned — a real 720p clip with a pin button beside Settings, replaceable with your own file via DSH_BOOT_ANIMATION or the DSH home directory.'

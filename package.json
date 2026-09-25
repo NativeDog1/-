@@ -17,11 +17,11 @@
   "author": "NativeDog1",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NativeDog1/-.git"
+    "url": "git+https://github.com/NativeDog1/dsh-boot-animation.git"
   },
-  "homepage": "https://github.com/NativeDog1/-#readme",
+  "homepage": "https://github.com/NativeDog1/dsh-boot-animation#readme",
   "bugs": {
-    "url": "https://github.com/NativeDog1/-/issues"
+    "url": "https://github.com/NativeDog1/dsh-boot-animation/issues"
   },
   "keywords": [
     "dsh",

@@ -13,7 +13,7 @@ you pinned — a video plays full-frame in the app window.
 ## Install
 
 ```sh
-dsh plugin --profile web add github:NativeDog1/-
+dsh plugin --profile web add github:NativeDog1/dsh-boot-animation
 ```
 
 > The built output (`lib/`) is committed and the package has no `prepare`

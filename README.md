@@ -12,7 +12,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add github:NativeDog1/-
+dsh plugin --profile web add github:NativeDog1/dsh-boot-animation
 ```
 
 > 仓库里已经提交了构建产物 `lib/`，也没有 `prepare` 生命周期脚本，
