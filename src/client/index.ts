@@ -49,9 +49,32 @@ const LIST_URL = '/dsh-boot-animation/videos.json'
 const SELECT_URL = '/dsh-boot-animation/select'
 const SEEN_KEY = 'dsh-boot-animation:seen'
 const PIN_KEY = 'dsh-boot-animation:pinned'
+const FIT_KEY = 'dsh-boot-animation:fit'
 const MAX_SEEN = 80
 /** Never let a stalled video trap the user behind the overlay. */
 const STALL_TIMEOUT_MS = 25000
+
+/**
+ * How the clip meets the window: 'cover' fills it and crops the overflow,
+ * 'contain' shows the whole frame and leaves black bars. Cover by default,
+ * because a splash that leaves bars on a normal monitor reads as broken.
+ * Read per overlay open, like the clip choice, so a change lands next playback.
+ */
+type Fit = 'cover' | 'contain'
+function readFit(): Fit {
+  try {
+    return window.localStorage.getItem(FIT_KEY) === 'contain' ? 'contain' : 'cover'
+  } catch {
+    return 'cover'
+  }
+}
+function writeFit(fit: Fit): void {
+  try {
+    window.localStorage.setItem(FIT_KEY, fit)
+  } catch {
+    /* private mode: it simply does not persist */
+  }
+}
 
 /** Set to true to narrate the plugin's decisions in the browser console. */
 const DEBUG = false
@@ -124,6 +147,11 @@ const CSS = `
   display:flex;align-items:center;justify-content:center;
   pointer-events:auto;cursor:pointer;overflow:hidden}
 .dba-video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
+/* Fills the window edge to edge. The base rule (contain) shows the whole frame
+   but leaves black bars whenever the window is not exactly the clip's aspect
+   ratio — and a browser viewport almost never is, because of the chrome above
+   it. Cover crops the overflow instead, which is what a splash wants. */
+.dba-video.dba-cover{object-fit:cover;object-position:center}
 .dba-skip{position:absolute;top:20px;right:22px;z-index:2;
   border:1px solid rgba(255,255,255,.42);background:rgba(0,0,0,.42);
   color:#fff;border-radius:999px;padding:6px 16px;font-size:13px;line-height:1.4;
@@ -165,6 +193,9 @@ const CSS = `
 .dba-dir code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
   color:var(--dsw-alias-text-primary,#333)}
 .dba-bar{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.dba-fit{display:flex;align-items:center;gap:8px;margin-top:12px;
+  font-size:12px;color:var(--dsw-alias-text-secondary,#777)}
+.dba-btn.dba-btn-on{border-color:rgba(7,193,96,.6);background:rgba(7,193,96,.12);color:#07974b}
 .dba-btn{border:1px solid rgba(127,127,127,.34);background:transparent;color:inherit;
   border-radius:8px;padding:5px 14px;font-size:12.5px;font-family:inherit;cursor:pointer}
 .dba-btn:hover{background:rgba(127,127,127,.14)}
@@ -218,6 +249,8 @@ function BootOverlay({ store }: { store: CurrentStore | null }): ReactElement | 
   ensureStyle()
 
   const { sessionId, isNewConversation } = useCurrentSession(store)
+  // Decided per open, so a change in the library panel lands on the next play.
+  const fit = readFit()
 
   const [showing, setShowing] = useState(false)
   const [needsTap, setNeedsTap] = useState(false)
@@ -311,7 +344,7 @@ function BootOverlay({ store }: { store: CurrentStore | null }): ReactElement | 
     { className: 'dba-root', onClick: activate },
     h('video', {
       ref: videoRef,
-      className: 'dba-video',
+      className: fit === 'cover' ? 'dba-video dba-cover' : 'dba-video',
       src: VIDEO_URL,
       muted: true,
       autoPlay: true,
@@ -433,6 +466,7 @@ const SOURCE_LABEL: Record<string, string> = {
 function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
   ensureStyle()
   const [state, setState] = useState<VideoList | null>(null)
+  const [fit, setFit] = useState<Fit>(() => readFit())
   const [msg, setMsg] = useState<{ text: string; kind: string }>({ text: '', kind: '' })
   const [busy, setBusy] = useState(false)
 
@@ -543,6 +577,39 @@ function VideoLibrary({ onClose }: { onClose: () => void }): ReactElement {
         '想加自己的片子：把 mp4 放进这个文件夹，再点「刷新」',
         h('br', null),
         h('code', null, state === null ? '…' : state.userDir),
+      ),
+      h(
+        'div',
+        { className: 'dba-fit' },
+        h('span', null, '播放时：'),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dba-btn' + (fit === 'cover' ? ' dba-btn-on' : ''),
+            title: '铺满整个窗口，超出部分裁掉 —— 不留黑边',
+            onClick: () => {
+              writeFit('cover')
+              setFit('cover')
+              setMsg({ text: '已设为「铺满屏幕」：下次播放生效', kind: 'dba-ok' })
+            },
+          },
+          '铺满屏幕',
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dba-btn' + (fit === 'contain' ? ' dba-btn-on' : ''),
+            title: '完整显示整帧，长宽比不匹配时留黑边',
+            onClick: () => {
+              writeFit('contain')
+              setFit('contain')
+              setMsg({ text: '已设为「完整显示」：下次播放生效', kind: 'dba-ok' })
+            },
+          },
+          '完整显示',
+        ),
       ),
       h(
         'div',
