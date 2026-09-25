@@ -186,6 +186,26 @@ ffprobe -v trace 修好的.mp4 2>&1 | grep -m1 moov   # 偏移应该很小
   `boot.mp4`（老路由，服务当前生效的那条，向后兼容）
 - `assets/boot.mp4` 的只读属性会让 ffmpeg/覆盖写入报 `Permission denied`：
   `Set-ItemProperty -Name IsReadOnly -Value $false`
+- **prefix 路由不能带尾部斜杠**：webserver 用
+  `pathname !== prefix && !pathname.startsWith(prefix + '/')` 匹配，注册
+  `.../media/` 会被当成 `.../media//`，永远匹配不上（曾导致 /media/<id> 全 404）
+
+## 验证脚本（改完跑一遍）
+
+| 命令 | 作用 |
+|---|---|
+| `npm run verify:routes` | 用**服务器自己的匹配规则**驱动真实 handler，断言每条路由 |
+| `npm run verify:letterbox` | 用 CDP 驱动本机 Edge，量出所选贴合方式实际留多少黑边 |
+| `npm run check` | 上面两个 + CSS 模板反引号检查 |
+| `npm run build:client` | 先跑 CSS 检查再构建（防带病构建） |
+
+两个脚本都是被真实 bug 逼出来的，各自都有过一次"用自己的规则测自己"的教训：
+它们的断言刻意复刻被测方的规则，并且在提交前会做**反向验证**（故意改坏 → 必须报错）。
+
+> 客户端构建有一个坑：整个 CSS 是一段模板字符串，注释里写一个反引号就会提前把它
+> 结束掉，而报错是 **TypeScript 的 parse error 指向某行 CSS**，同时 `lib/client.js`
+> 保持不变 —— 看起来像改成功了其实没生效。`scripts/check-css-template.mjs` 专门
+> 拦这个，已接进 `build:client`。
 
 ## 许可
 

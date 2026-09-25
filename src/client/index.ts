@@ -148,8 +148,10 @@ const CSS = `
 /* Absolute fill rather than flex + width/height percentages: a percentage height
    inside a flex item depends on the container's resolved height, and any ancestor
    that establishes a containing block (transform/filter/contain) can shrink it.
-   `inset:0` on an absolutely positioned child of a fixed root is exactly the
-   padding box, so the video always covers the whole overlay. */
+   inset:0 on an absolutely positioned child of a fixed root is exactly the
+   padding box, so the video always covers the whole overlay.
+   NOTE: never put a backtick in this block — the whole sheet is a template
+   literal, and one backtick ends it. scripts/check-css-template.mjs enforces it. */
 .dba-video{position:absolute;inset:0;width:100%;height:100%;
   object-fit:contain;background:#000;display:block}
 /* Fills the window edge to edge. The base rule (contain) shows the whole frame
