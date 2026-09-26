@@ -55,6 +55,51 @@ const MAX_SEEN = 80
 const STALL_TIMEOUT_MS = 25000
 
 /**
+ * The clip's content key, fetched once so the media URL can carry `?v=`.
+ *
+ * The route is constant but the BYTES behind it are not: this session alone
+ * served three different files under `/boot.mp4`. A media cache keyed by that
+ * URL, revalidating range requests one at a time, can end up holding a spliced
+ * file — and a spliced MP4 does not error, it simply never paints. Pinning the
+ * content key into the URL gives every distinct clip its own cache entry, so a
+ * stale one cannot exist, and lets the host answer `immutable` rather than
+ * `no-cache` (which is what makes the NEXT play instant instead of a round trip).
+ *
+ * Resolved BEFORE any overlay opens and never during playback: a src that
+ * changes after mount restarts the media load while the play() effect does not
+ * re-run, which is the black frame this plugin already fixed once.
+ */
+let activeVersion: string | null = null
+let versionStarted = false
+function resolveActiveVersion(): void {
+  if (versionStarted) return
+  versionStarted = true
+  void (async () => {
+    try {
+      const response = await fetch(LIST_URL, { cache: 'no-store' })
+      if (!response.ok) return
+      const data = (await response.json()) as { activeVersion?: unknown }
+      const version = data.activeVersion
+      if (typeof version !== 'string' || version === '') return
+      activeVersion = version
+      log('active version', version)
+      // Warm the media cache while nobody is waiting for it: with a versioned
+      // URL the host marks this immutable, so the later <video> request is
+      // answered from the local copy instead of the network.
+      await fetch(videoSrc(), { cache: 'force-cache' })
+      notify('media prefetched', videoSrc())
+    } catch (error: unknown) {
+      notify('prefetch failed', String(error))
+    }
+  })()
+}
+
+/** The URL to play, carrying the content key when it is already known. */
+function videoSrc(): string {
+  return activeVersion === null ? VIDEO_URL : VIDEO_URL + '?v=' + encodeURIComponent(activeVersion)
+}
+
+/**
  * How the clip meets the window: 'cover' fills it and crops the overflow,
  * 'contain' shows the whole frame and leaves black bars. Cover by default,
  * because a splash that leaves bars on a normal monitor reads as broken.
@@ -76,27 +121,44 @@ function writeFit(fit: Fit): void {
   }
 }
 
-/** Set to true to narrate the plugin's decisions in the browser console. */
+/** Set to true to narrate every decision the plugin makes in the browser console. */
 const DEBUG = false
-function log(...args: unknown[]): void {
-  if (!DEBUG) return
-  try {
-    const text = args
-      .map((a) => {
-        if (typeof a === 'object' && a !== null) {
-          try {
-            return JSON.stringify(a)
-          } catch {
-            return String(a)
-          }
+function formatArgs(args: unknown[]): string {
+  return args
+    .map((a) => {
+      if (typeof a === 'object' && a !== null) {
+        try {
+          return JSON.stringify(a)
+        } catch {
+          return String(a)
         }
-        return String(a)
-      })
-      .join(' ')
+      }
+      return String(a)
+    })
+    .join(' ')
+}
+function narrate(text: string): void {
+  try {
     console.log('[dsh-boot-animation] ' + text)
   } catch {
     /* console unavailable */
   }
+}
+function log(...args: unknown[]): void {
+  if (!DEBUG) return
+  narrate(formatArgs(args))
+}
+
+/**
+ * The always-on subset. A black overlay reports nothing by itself — no network
+ * error, no thrown exception, just a video element that never paints — so the
+ * four things needed to diagnose one from the outside are logged unconditionally:
+ * which URL the element actually used, when the first frame arrived, when the
+ * element errored and with which code, and when the stall watchdog gave up.
+ * They are one line each and only fire on a play, so the noise is bounded.
+ */
+function notify(...args: unknown[]): void {
+  narrate(formatArgs(args))
 }
 
 function readSeen(): string[] {
@@ -166,6 +228,11 @@ const CSS = `
   font-family:inherit;text-shadow:0 1px 8px rgba(0,0,0,.9);
   animation:dba-breathe 2.4s ease-in-out infinite;white-space:nowrap}
 @keyframes dba-breathe{0%,100%{opacity:.55}50%{opacity:1}}
+.dba-status{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:2;color:rgba(255,255,255,.88);font-size:14px;letter-spacing:.04em;
+  font-family:inherit;text-align:center;max-width:78vw;
+  background:rgba(0,0,0,.46);border-radius:10px;padding:10px 18px;
+  text-shadow:0 1px 10px rgba(0,0,0,.9)}
 .dba-pin{display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;padding:0;border:0;border-radius:8px;cursor:pointer;
   background:transparent;color:var(--dsw-alias-text-secondary,#888);
@@ -267,6 +334,13 @@ function BootOverlay({
 
   const [showing, setShowing] = useState(false)
   const [needsTap, setNeedsTap] = useState(false)
+  const [phase, setPhase] = useState<'loading' | 'playing' | 'stalled' | 'error'>('loading')
+  /**
+   * Frozen at mount, deliberately: `videoSrc()` reads a value that resolves from
+   * an async fetch, and letting the src change after mount is exactly the black
+   * frame bug this plugin already paid for once (see the note above VIDEO_URL).
+   */
+  const [src] = useState(videoSrc)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const closedRef = useRef(false)
   const lastSessionRef = useRef<string | null>(null)
@@ -332,6 +406,20 @@ function BootOverlay({
     const video = videoRef.current
     if (video === null) return undefined
     video.muted = true
+    const openedAt = performance.now()
+    /** One line that carries everything a black-frame report needs. */
+    const report = (label: string): void =>
+      notify(label, {
+        ms: Math.round(performance.now() - openedAt),
+        readyState: video.readyState,
+        networkState: video.networkState,
+        src: video.currentSrc || video.src,
+      })
+    const onPlaying = (): void => {
+      setPhase('playing')
+      report('first frame painted')
+    }
+    video.addEventListener('playing', onPlaying)
     const attempt = video.play()
     if (attempt !== undefined && typeof attempt.then === 'function') {
       attempt.then(() => log('play started')).catch((error: unknown) => {
@@ -340,9 +428,17 @@ function BootOverlay({
       })
     }
     const guard = window.setTimeout(() => {
-      if (!closedRef.current) close()
+      if (!closedRef.current) {
+        // Report BEFORE closing: a silent close leaves nothing to diagnose.
+        setPhase('stalled')
+        report('stalled, giving up after ' + STALL_TIMEOUT_MS + 'ms')
+        close()
+      }
     }, STALL_TIMEOUT_MS)
-    return () => window.clearTimeout(guard)
+    return () => {
+      video.removeEventListener('playing', onPlaying)
+      window.clearTimeout(guard)
+    }
   }, [showing, close])
 
   if (!showing) return null
@@ -369,7 +465,7 @@ function BootOverlay({
     h('video', {
       ref: videoRef,
       className: fit === 'cover' ? 'dba-video dba-cover' : 'dba-video',
-      src: VIDEO_URL,
+      src,
       muted: true,
       autoPlay: true,
       playsInline: true,
@@ -377,11 +473,30 @@ function BootOverlay({
       onEnded: close,
       onError: () => {
         const video = videoRef.current
-        log('video error', video?.error?.code, video?.error?.message)
-        close()
+        const code = video?.error?.code ?? 0
+        const message = video?.error?.message ?? ''
+        notify('video element error', { code, message, src: video?.currentSrc || src, readyState: video?.readyState ?? -1 })
+        setPhase('error')
+        // Do not slam the overlay shut: the reason has to stay readable for a
+        // moment, and 跳过 is right there. The stall watchdog would have closed
+        // it silently, which is how a real failure looks like "nothing happened".
+        window.setTimeout(() => {
+          if (!closedRef.current) close()
+        }, 8000)
       },
       onClick: (event: { stopPropagation: () => void }) => event.stopPropagation(),
     }),
+    phase === 'playing'
+      ? null
+      : h(
+          'div',
+          { className: 'dba-status' },
+          phase === 'error'
+            ? '视频加载失败 —— 控制台有 [dsh-boot-animation] 日志'
+            : phase === 'stalled'
+              ? '视频加载超时'
+              : '正在加载视频…',
+        ),
     h(
       'button',
       {
@@ -717,6 +832,11 @@ export function apply(ctx: ClientContext): void {
       ? candidate
       : null
   log('apply', { hasUiSession: ctx.uiSession !== undefined, hasStore: store !== null })
+
+  // Warm the media cache before any overlay can open, so the first play starts
+  // from the local copy instead of the network. Deliberately here, not at the
+  // trigger: the version has to be known before a src is built.
+  resolveActiveVersion()
 
   // Rendering a JSX-free tree on purpose (createElement), so no provider
   // element is involved. Hooks live in AppRoot, never in apply: apply is called

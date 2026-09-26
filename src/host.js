@@ -481,6 +481,13 @@ function publicVideo(v, extra = {}) {
     mtime: v.mtime,
     legacy: v.legacy,
     faststart: v.faststart === true,
+    /**
+     * The clip's content identity, so a client can pin it into the media URL as
+     * `?v=`. A bare URL must revalidate on every play (correct but slow); a
+     * versioned one can be cached forever. It is also what stops a browser from
+     * splicing bytes served under the same URL before and after a clip changed.
+     */
+    version: v.contentKey ?? null,
     // How many on-disk copies collapsed into this row, and where the others
     // live. Reported so a collapsed duplicate is visible rather than mysterious.
     copies: v.copies ?? 1,
@@ -494,6 +501,7 @@ function serveList(res) {
   sendJson(res, {
     activeId: video === null ? null : video.id,
     activeHow: how,
+    activeVersion: video === null ? null : video.contentKey ?? null,
     videos: videos.map((v) => publicVideo(v, { active: video !== null && v.id === video.id })),
     userDir: join(HOME_DIR(), 'videos'),
     accepts: [...VIDEO_EXT],
@@ -505,7 +513,10 @@ function serveStatus(res) {
   // back to anything that can reach this port.
   const { video, how, videos } = resolveActive()
   sendJson(res, {
-    active: video === null ? null : { kind: how, id: video.id, name: video.name, bytes: video.bytes },
+    active:
+      video === null
+        ? null
+        : { kind: how, id: video.id, name: video.name, bytes: video.bytes, version: video.contentKey ?? null },
     count: videos.length,
     videos: videos.map((v) => publicVideo(v, { active: video !== null && v.id === video.id })),
     // Legacy fields, kept because README and older probes read them.
@@ -535,22 +546,52 @@ function etagOf(stats) {
 }
 
 /**
- * Serve media bytes with Range support and REVALIDATING caching.
+ * Which `cache-control` a media response may carry.
  *
- * `no-store` used to be here, which is the worst of both worlds for media: the
- * browser may not keep a single byte, so every overlay opening re-downloaded the
- * whole clip, and the splash sat black while it did. `no-cache` means "keep it,
- * but ask before using" — combined with the ETag, an unchanged clip answers 304
- * and playback starts from the local copy, while a clip the user just swapped in
- * fails the comparison and streams fresh. Correct AND fast.
+ * A bare URL can only revalidate: `no-cache` means "keep it, but ask before
+ * using", so an unchanged clip answers 304 and playback starts from the local
+ * copy, while a clip the user just swapped in fails the comparison and streams
+ * fresh. Correct, but it costs a round trip per play and it leaves the browser
+ * free to splice ranges served before and after the bytes changed — which shows
+ * up as a video that never paints.
+ *
+ * A URL that PINS the content key (`?v=<contentKey>`) cannot go stale: the key
+ * changes whenever the bytes do, so the old URL is simply a different resource.
+ * That one may be cached forever, which is what makes a replay start without a
+ * single request.
+ *
+ * `no-store` used to be here, the worst of both worlds for media: the browser
+ * could not keep a byte, so every overlay opening re-downloaded the whole clip
+ * and the splash sat black while it did.
+ */
+function cacheControlFor(req, version) {
+  if (typeof version === 'string' && version !== '') {
+    const raw = typeof req.url === 'string' ? req.url : ''
+    const query = raw.indexOf('?')
+    if (query !== -1) {
+      try {
+        if (new URLSearchParams(raw.slice(query + 1)).get('v') === version) {
+          return 'public, max-age=31536000, immutable'
+        }
+      } catch {
+        /* malformed query: fall through to revalidation */
+      }
+    }
+  }
+  return 'no-cache'
+}
+
+/**
+ * Serve media bytes with Range support and content-addressed caching.
  *
  * `open(start, end)` yields the body for the resolved slice, either a Buffer
  * (embedded clips) or a Readable (files), so this one routine covers both.
  */
-function sendMedia(req, res, { size, etag, lastModified, open }) {
+function sendMedia(req, res, { size, etag, lastModified, version = null, open }) {
   const validators = {}
   if (etag !== null) validators.etag = etag
   if (lastModified !== null) validators['last-modified'] = lastModified
+  const cacheControl = cacheControlFor(req, version)
 
   if (etag !== null) {
     const inm = req.headers['if-none-match']
@@ -562,7 +603,7 @@ function sendMedia(req, res, { size, etag, lastModified, open }) {
         .some((candidate) => candidate === etag || candidate === '*')
     if (matched) {
       // The body the browser already has is still current.
-      res.writeHead(304, { ...validators, 'cache-control': 'no-cache' })
+      res.writeHead(304, { ...validators, 'cache-control': cacheControl })
       res.end()
       return
     }
@@ -610,7 +651,7 @@ function sendMedia(req, res, { size, etag, lastModified, open }) {
         'content-length': String(end - start + 1),
         'content-range': 'bytes ' + String(start) + '-' + String(end) + '/' + String(size),
         'accept-ranges': 'bytes',
-        'cache-control': 'no-cache',
+        'cache-control': cacheControl,
       })
       if (req.method === 'HEAD') {
         res.end()
@@ -626,7 +667,7 @@ function sendMedia(req, res, { size, etag, lastModified, open }) {
     'content-type': CONTENT_TYPE,
     'content-length': String(size),
     'accept-ranges': 'bytes',
-    'cache-control': 'no-cache',
+    'cache-control': cacheControl,
   })
   if (req.method === 'HEAD') {
     res.end()
@@ -636,7 +677,7 @@ function sendMedia(req, res, { size, etag, lastModified, open }) {
 }
 
 /** Serve a clip from disk. */
-function streamFile(req, res, filePath, size) {
+function streamFile(req, res, filePath, size, version = null) {
   let stats = null
   try {
     stats = statSync(filePath)
@@ -645,6 +686,7 @@ function streamFile(req, res, filePath, size) {
   }
   sendMedia(req, res, {
     size,
+    version,
     etag: stats === null ? null : etagOf(stats),
     lastModified: stats === null ? null : new Date(stats.mtimeMs).toUTCString(),
     open: (start, end) =>
@@ -656,6 +698,7 @@ function streamFile(req, res, filePath, size) {
 function streamEmbedded(req, res, buffer, contentKey) {
   sendMedia(req, res, {
     size: buffer.length,
+    version: contentKey,
     // The content hash is already the clip's identity, so revalidation is exact
     // rather than stat-based.
     etag: '"embedded-' + contentKey + '"',
@@ -680,7 +723,7 @@ async function streamClip(req, res, video) {
     streamEmbedded(req, res, buffer, video.contentKey)
     return
   }
-  streamFile(req, res, video.path, video.bytes)
+  streamFile(req, res, video.path, video.bytes, video.contentKey)
 }
 
 /** The historical single-video route: whatever is active right now. */
