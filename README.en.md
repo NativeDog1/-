@@ -63,10 +63,10 @@ there are no mp4 files on disk for them):
 
 | Name in the picker | Size |
 |---|---|
-| `DeepSeek 品牌片头` (brand) | 2.6 MB |
-| `DeepSeek 赛博朋克片头` (cyberpunk) | 3.1 MB |
-| `DeepSeek 数字角色苏醒` (awakening) | 3.9 MB |
-| `DeepSeek 启动问题` (startup) | 10.7 MB |
+| `DeepSeek 品牌片头` (brand) | 1.2 MB |
+| `DeepSeek 赛博朋克片头` (cyberpunk) | 1.8 MB |
+| `DeepSeek 数字角色苏醒` (awakening) | 2.5 MB |
+| `DeepSeek 启动问题` (startup) | 3.2 MB |
 
 All four are **faststart** remuxes (`moov` before `mdat`), so they play while
 still downloading; the embed script refuses any input where it is not.

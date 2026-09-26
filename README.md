@@ -62,13 +62,13 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 
 | 片库里的名字 | 来源 | 大小 |
 |---|---|---|
-| `DeepSeek 品牌片头` | 内嵌 `lib/clips.data.js` | 2.6 MB |
-| `DeepSeek 赛博朋克片头` | 内嵌 `lib/clips.data.js` | 3.1 MB |
-| `DeepSeek 数字角色苏醒` | 内嵌 `lib/clips.data.js` | 3.9 MB |
-| `DeepSeek 启动问题` | 内嵌 `lib/clips.data.js` | 10.7 MB |
+| `DeepSeek 品牌片头` | 内嵌 `lib/clips.data.js` | 1.2 MB |
+| `DeepSeek 赛博朋克片头` | 内嵌 `lib/clips.data.js` | 1.8 MB |
+| `DeepSeek 数字角色苏醒` | 内嵌 `lib/clips.data.js` | 2.5 MB |
+| `DeepSeek 启动问题` | 内嵌 `lib/clips.data.js` | 3.2 MB |
 
 **这些片段没有落盘的 mp4 文件** —— 它们以 base64 存在 `lib/clips.data.js` 里，host 在
-第一次被请求时才 import（约 27 MB 的模块，如果在启动时解析，每次开 DSH 都要白付这个代价）。
+第一次被请求时才 import（约 11.5 MB 的模块，如果在启动时解析，每次开 DSH 都要白付这个代价）。
 这样做的意义是：不会再有 `files` 字段漏写、安装副本过期、或者随包发出一个没做 faststart
 的容器这些事。`media/*.mp4` 只是 `npm run embed-clips` 的输入，**不随包发布**。
 
@@ -76,10 +76,9 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 `moov` 不在前面的输入。这很重要：索引表在文件末尾的 mp4 要整段下载完才出画面，
 叠加客户端 25 秒看门狗，表现就是「片头全黑」。
 
-体积：npm 包 **21.5 MB**（tarball）/ 解包 **28.6 MB**（base64 相对原始 mp4 有 33% 冗余，gzip 打包能追回约 8 MB）。
-四段里 `DeepSeek 启动问题` 一段就占了 10.7 MB / base64 后 15.0 MB —— 想让包体更小的话，
-把它用 `ffmpeg -i 原片.mp4 -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 128k -movflags +faststart` 重编码
-（同一段 10.7 MB → 约 2–3 MB），再重跑 `npm run embed-clips`。
+体积：npm 包 **9.1 MB**（tarball）/ 解包 **12.2 MB**。四段都做过 CRF 20 重编码 + faststart
+重排，相比各自的原片省下 36%–71%（合计 20.4 MB → 8.7 MB），画质指标 SSIM 0.988–0.996、
+PSNR 44–48 dB —— 这是「肉眼看不出差别」的区间。原片另存于仓库外 `~/dsh-dev/_clip-masters/`。
 
 想换成自己的片子：把 mp4 放进 `media/`，改 `scripts/embed-clips.mjs` 里的清单，
 跑 `npm run embed-clips`。（临时试片不用这么麻烦 —— 见下面的「最省事的方式」。）
