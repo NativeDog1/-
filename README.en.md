@@ -53,23 +53,44 @@ switching away and back, or reloading. Click again to unpin.
 > panel is showing), there is no current conversation yet and the pin is disabled.
 > Open a conversation first.
 
-## Use your own video
+## Built-in clips and your own video
 
-The host half looks for a non-empty file in this order, **re-resolving on every
-request**, so swapping the file needs no restart:
+The plugin is a **library**, not a single slot: it lists every clip it can find,
+you pick one, and the choice is remembered.
+
+**Four clips ship with it**, embedded in the code (`lib/clips.data.js`, base64 —
+there are no mp4 files on disk for them):
+
+| Name in the picker | Size |
+|---|---|
+| `DeepSeek 品牌片头` (brand) | 2.6 MB |
+| `DeepSeek 赛博朋克片头` (cyberpunk) | 3.1 MB |
+| `DeepSeek 数字角色苏醒` (awakening) | 3.9 MB |
+| `DeepSeek 启动问题` (startup) | 10.7 MB |
+
+All four are **faststart** remuxes (`moov` before `mdat`), so they play while
+still downloading; the embed script refuses any input where it is not.
+`media/*.mp4` is only the input to `npm run embed-clips` and is **not published**.
+
+**Your own files still win.** The host re-resolves on every request, so swapping a
+file needs no restart:
 
 | Order | Location |
 |---|---|
-| 1 | the file named by `DSH_BOOT_ANIMATION` |
-| 2 | `$DSH_HOME/boot-animation/intro.mp4` (i.e. `~/.dsh/boot-animation/intro.mp4`) |
-| 3 | the bundled `assets/boot.mp4` |
+| 1 | the clip picked in the 🎛 library panel (`~/.dsh/boot-animation/selection.json`) |
+| 2 | the file named by `DSH_BOOT_ANIMATION` |
+| 3 | `~/.dsh/boot-animation/intro.mp4` |
+| 4 | the newest file in `~/.dsh/boot-animation/videos/` |
+| 5 | the four embedded clips above |
 
 ```sh
-mkdir -p ~/.dsh/boot-animation
-cp my-intro.mp4 ~/.dsh/boot-animation/intro.mp4
+mkdir -p ~/.dsh/boot-animation/videos
+cp my-intro.mp4 ~/.dsh/boot-animation/videos/
 ```
 
-Check which one is in use:
+Then open the **🎛** button at the sidebar foot (next to the 🎞 pin) to pick it.
+
+Check what is in use:
 
 ```sh
 curl http://127.0.0.1:3080/dsh-boot-animation/status.json

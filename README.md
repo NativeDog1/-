@@ -56,26 +56,30 @@ DSH 的客户端 bundle 响应带 `cache-control: max-age=31536000, immutable`�
 
 插件现在是一个**片库**，不是单个槽位：它会把所有能找到的视频都列出来，你选一个，选择会被记住。
 
-### 插件自带两段片头（内嵌在代码里）
+### 插件自带四段片头（内嵌在代码里）
 
-装完不用加任何东西，片库里就已经有两段可选：
+装完不用加任何东西，片库里就已经有四段可选：
 
 | 片库里的名字 | 来源 | 大小 |
 |---|---|---|
 | `DeepSeek 品牌片头` | 内嵌 `lib/clips.data.js` | 2.6 MB |
 | `DeepSeek 赛博朋克片头` | 内嵌 `lib/clips.data.js` | 3.1 MB |
+| `DeepSeek 数字角色苏醒` | 内嵌 `lib/clips.data.js` | 3.9 MB |
+| `DeepSeek 启动问题` | 内嵌 `lib/clips.data.js` | 10.7 MB |
 
-**这两段没有落盘的 mp4 文件** —— 它们以 base64 存在 `lib/clips.data.js` 里，host 在
-第一次被请求时才 import（约 8 MB 的模块，如果在启动时解析，每次开 DSH 都要白付这个代价）。
+**这些片段没有落盘的 mp4 文件** —— 它们以 base64 存在 `lib/clips.data.js` 里，host 在
+第一次被请求时才 import（约 27 MB 的模块，如果在启动时解析，每次开 DSH 都要白付这个代价）。
 这样做的意义是：不会再有 `files` 字段漏写、安装副本过期、或者随包发出一个没做 faststart
 的容器这些事。`media/*.mp4` 只是 `npm run embed-clips` 的输入，**不随包发布**。
 
-两段都是 **faststart** 过的（`moov` 在文件头），可以边下边播；生成脚本会拒绝任何
+四段都是 **faststart** 过的（`moov` 在文件头），可以边下边播；生成脚本会拒绝任何
 `moov` 不在前面的输入。这很重要：索引表在文件末尾的 mp4 要整段下载完才出画面，
 叠加客户端 25 秒看门狗，表现就是「片头全黑」。
 
-体积：发布包约 **6.1 MB**（base64 的冗余被 gzip 抵消，所以和内嵌前一样）；
-安装后磁盘占用 8.0 MB（原来是 5.7 MB 的 mp4）。
+体积：npm 包 **21.5 MB**（tarball）/ 解包 **28.6 MB**（base64 相对原始 mp4 有 33% 冗余，gzip 打包能追回约 8 MB）。
+四段里 `DeepSeek 启动问题` 一段就占了 10.7 MB / base64 后 15.0 MB —— 想让包体更小的话，
+把它用 `ffmpeg -i 原片.mp4 -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 128k -movflags +faststart` 重编码
+（同一段 10.7 MB → 约 2–3 MB），再重跑 `npm run embed-clips`。
 
 想换成自己的片子：把 mp4 放进 `media/`，改 `scripts/embed-clips.mjs` 里的清单，
 跑 `npm run embed-clips`。（临时试片不用这么麻烦 —— 见下面的「最省事的方式」。）
@@ -154,7 +158,7 @@ host 半侧按这个顺序解析，**每次请求都重新解析**（换片子�
 | 2 | 环境变量 `DSH_BOOT_ANIMATION` 指向的文件 |
 | 3 | `~/.dsh/boot-animation/intro.mp4`（历史落点，仍优先于片库里的其他文件） |
 | 4 | `~/.dsh/boot-animation/videos/` 里最新修改的那个 |
-| 5 | **内嵌的两段**（品牌片头优先）—— 永远兜得住，因为它在代码里 |
+| 5 | **内嵌的四段**（按 `scripts/embed-clips.mjs` 里的顺序，品牌片头优先）—— 永远兜得住，因为它在代码里 |
 
 所以最保险的手动换法依然是：
 
